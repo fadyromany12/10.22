@@ -2404,9 +2404,10 @@ body.dark-mode .dropdown-option.selected {
 
 
     <script>
-      const PLANNED_BREAK_SECONDS = 15 * 60; // 15 minutes
-      const PLANNED_LUNCH_SECONDS = 30 * 60; // 30 minutes
-      let selfUserName = ""; 
+      // --- MODIFIED PHASE 3: Changed const to let for dynamic updates ---
+      let PLANNED_BREAK_SECONDS = 15 * 60; // Default fallback
+      let PLANNED_LUNCH_SECONDS = 30 * 60; // Default fallback
+      let selfUserName = "";
       let selfRole = "agent"; 
       let allUsersList = []; 
       let allAdminsList = []; 
@@ -2649,6 +2650,12 @@ function populateUserInfo(user) {
     infoDiv.innerHTML = "Your email is not registered.";
     infoDiv.className = 'error'; 
     return;
+  }
+  // --- NEW PHASE 3: Update Break Rules from Backend ---
+  if (user.breakRules) {
+    PLANNED_BREAK_SECONDS = user.breakRules.break1; // or break2, assuming they are same
+    PLANNED_LUNCH_SECONDS = user.breakRules.lunch;
+    console.log(`Break Rules Loaded: Break=${PLANNED_BREAK_SECONDS}s, Lunch=${PLANNED_LUNCH_SECONDS}s`);
   }
 
   selfUserName = user.name; 
@@ -3032,20 +3039,20 @@ function submitSchedule() {
         if (statusTimer) clearInterval(statusTimer);
 
         const displayDiv = document.getElementById('current-status-display');
-        
-        // 1. Force ALL buttons to be enabled (Clickable) at all times
         setAllPunchButtonsDisabled(false); 
 
-        // Handle Logged Out Status Display
         if (!statusInfo || !statusInfo.status || statusInfo.status === 'Logged Out') {
           displayDiv.style.visibility = 'hidden';
-          displayDiv.className = 'status-message'; // Reset class
+          displayDiv.className = 'status-message';
           return;
         }
 
         const punchTime = new Date(statusInfo.time);
         
-        // Calculate Shift End
+        // --- PHASE 5: Live Net Hours Vars ---
+        const loginTime = statusInfo.loginTime ? new Date(statusInfo.loginTime) : null;
+        const deductionsSoFar = statusInfo.deductionsSoFar || 0;
+        
         let shiftEnd = null;
         if (statusInfo.schedule && statusInfo.schedule.end) {
           shiftEnd = new Date(statusInfo.schedule.end);
@@ -3056,67 +3063,69 @@ function submitSchedule() {
           const diffMs = now.getTime() - punchTime.getTime();
           const diffSec = Math.floor(diffMs / 1000);
           
+          // Standard Elapsed Time
           let elapsedStr = '';
           if (diffSec < 60) elapsedStr = `${diffSec}s`;
           else if (diffSec < 3600) elapsedStr = `${Math.floor(diffSec / 60)}m ${diffSec % 60}s`;
           else elapsedStr = `${Math.floor(diffSec / 3600)}h ${Math.floor((diffSec % 3600) / 60)}m`;
 
           let statusClass = getStatusClass(statusInfo.status);
-          // Force specific class for "Logged In" to ensure green
           if (statusInfo.status === 'Logged In') statusClass = 'Logged-In';
 
           let warningMsg = "";
-          let isWarning = false;
           
           // 1. Break Exceed Logic
           let plannedSeconds = 0;
-          // Check specifically for Break/Lunch statuses
-          if (statusInfo.status === 'On First Break' || statusInfo.status === 'On Last Break') {
-             plannedSeconds = PLANNED_BREAK_SECONDS;
-          } else if (statusInfo.status === 'On Lunch') {
-             plannedSeconds = PLANNED_LUNCH_SECONDS;
-          }
+          if (statusInfo.status === 'On First Break' || statusInfo.status === 'On Last Break') plannedSeconds = PLANNED_BREAK_SECONDS;
+          else if (statusInfo.status === 'On Lunch') plannedSeconds = PLANNED_LUNCH_SECONDS;
           
+          // --- PHASE 5: Current Break Excess Calculation ---
+          let currentExcess = 0;
+
           if (plannedSeconds > 0) {
-            // We are on a break, check if exceeded
             if (diffSec > plannedSeconds) {
               const exMs = diffSec - plannedSeconds;
               const exM = Math.floor(exMs / 60);
               const exS = exMs % 60;
               warningMsg = ` <strong style="color: #b91c1c;">(Exceeded by ${exM}m ${exS}s)</strong>`;
-              isWarning = true;
-              statusClass = 'On-Leave'; // Turn red
+              statusClass = 'On-Leave';
+              currentExcess = exMs; // This break is currently exceeding
             } else {
-              // Still within break time
               const rem = plannedSeconds - diffSec;
               const remM = Math.floor(rem / 60);
               warningMsg = ` <span style="color: #15803d; font-size: 0.9em;">(${remM}m remaining)</span>`;
             }
           } 
-          // 2. Overtime Logic (Only if Logged In and not on break)
+          // 2. Overtime Logic
           else if (statusInfo.status === 'Logged In' && shiftEnd && now > shiftEnd) {
             const otMs = now.getTime() - shiftEnd.getTime();
             const otSec = Math.floor(otMs / 1000);
             const otH = Math.floor(otSec / 3600);
             const otM = Math.floor((otSec % 3600) / 60);
-            
             warningMsg = ` <strong style="color: #d97706;">(OVERTIME: ${otH}h ${otM}m)</strong>`;
-            // We keep the statusClass green (Logged-In) but add the orange text, 
-            // or we can change the bg to yellow/orange if preferred.
-            // For now, let's make the badge look distinct.
-            statusClass = 'pending'; // Uses the yellow/orange style
+            statusClass = 'pending';
           } 
 
-          // Apply classes
+          // --- PHASE 5: Calculate & Display Net Hours ---
+          let netHoursHtml = "";
+          if (loginTime) {
+             const totalElapsed = Math.floor((now.getTime() - loginTime.getTime()) / 1000);
+             // Net = Total - (Past Deductions) - (Current Excess)
+             const netSeconds = Math.max(0, totalElapsed - deductionsSoFar - currentExcess);
+             
+             const nH = Math.floor(netSeconds / 3600);
+             const nM = Math.floor((netSeconds % 3600) / 60);
+             netHoursHtml = `<div style="font-size:0.85em; margin-top:4px; color: var(--text-color-secondary);">Net Today: <strong>${nH}h ${nM}m</strong></div>`;
+          }
+
           displayDiv.className = `status-message visible status-${statusClass}`;
-          
-          // Render
           displayDiv.innerHTML = `
             <div style="display:flex; align-items:center; justify-content:center; gap:10px;">
                <span style="font-size:1.2em;">${statusInfo.status}</span>
                <span style="font-weight:400; font-size:1em; opacity:0.9;">${elapsedStr}</span>
             </div>
             <div style="font-size:0.9em; margin-top:4px;">${warningMsg}</div>
+            ${netHoursHtml}
           `;
         };
 
