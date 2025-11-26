@@ -1258,6 +1258,26 @@ body.dark-mode .dropdown-option.selected {
   font-weight: 600;
 }
 
+
+.live-timer {
+  font-family: monospace;
+  font-weight: 700;
+  margin-left: 8px;
+  color: var(--text-color-secondary);
+}
+.live-timer.active {
+  color: var(--konecta-blue);
+}
+.live-timer.exceeded {
+  color: #dc2626; /* Red */
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
       .read-only-field { background-color: #f3f4f6 !important; color: #6b7280 !important; cursor: not-allowed; }
   .profile-subview { animation: fadeIn 0.3s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
@@ -1678,87 +1698,60 @@ body.dark-mode .dropdown-option.selected {
         <!--    TAB 5: SCHEDULE EDITOR PANEL    -->
         <!-- ================================== -->
         <div id="schedule-panel" class="tab-panel">
-  
-  <form id="csv-import-form" class="form-container">
-    <h2>Bulk Schedule Importer (CSV)</h2>
-    <p class="text-color-secondary" style="font-size: 0.9rem;">
-      Upload a CSV with headers: <code>Name</code>, <code>StartDate</code>, <code>ShiftStartTime</code>, <code>EndDate</code>, <code>ShiftEndTime</code>, <code>LeaveType</code>, <code>agent email</code>
-    </p>
-    <button 
-      type="button" 
-      class="btn-secondary" 
-      style="margin-bottom: 20px; max-width: 300px;" 
-      onclick="downloadScheduleTemplate()">
-      Download CSV Template
-    </button>
-    <div class="form-group">
-      <label for="csv-file-input">Select CSV File</label>
-      <input type="file" id="csv-file-input" accept=".csv">
-    </div>
-    <button type="button" class="btn-primary" onclick="importScheduleCSV()">Import CSV</button>
-  </form>
-  <div id="csv-import-status" class="status-message"></div>
-  
-  <hr class="section-divider">
-  
-  <form id="schedule-form" class="form-container">
-    <h2>Manual Schedule Editor</h2>
-    <div class="form-group">
-      <label>User</label>
-      <div id="schedule-agent-select-container"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label for="schedule-start-date">Start Date</label><input type="date" id="schedule-start-date" required></div>
-      <div class="form-group"><label for="schedule-end-date">End Date (Optional)</label><input type="date" id="schedule-end-date"><small>Leave blank to submit for a single day.</small></div>
-    </div>
-    <div class="form-group"><label for="schedule-leave-type">Leave Type / Status</label><select id="schedule-leave-type" onchange="toggleTimeFields()"><option value="Present">Present</option><option value="Sick">Sick</option><option value="Annual">Annual</option><option value="Casual">Casual</option><option value="Absent">Absent</option><option value="Day Off">Day Off</option></select></div>
-    
-    <div id="time-fields" class="form-row" style="flex-wrap: wrap;">
-      <div class="form-group" style="min-width: 140px;">
-        <label for="schedule-start-time">Shift Start</label>
-        <input type="time" id="schedule-start-time">
-      </div>
-      
-      <div class="form-group" style="min-width: 140px;">
-        <label>1st Break Window</label>
-        <div style="display:flex; gap:5px;">
-          <input type="time" id="schedule-b1-start" placeholder="Start" style="font-size:0.8rem;">
-          <input type="time" id="schedule-b1-end" placeholder="End" style="font-size:0.8rem;">
-        </div>
-      </div>
-
-      <div class="form-group" style="min-width: 140px;">
-        <label>Lunch Window</label>
-        <div style="display:flex; gap:5px;">
-          <input type="time" id="schedule-lunch-start" placeholder="Start" style="font-size:0.8rem;">
-          <input type="time" id="schedule-lunch-end" placeholder="End" style="font-size:0.8rem;">
-        </div>
-      </div>
-
-      <div class="form-group" style="min-width: 140px;">
-        <label>2nd Break Window</label>
-        <div style="display:flex; gap:5px;">
-          <input type="time" id="schedule-b2-start" placeholder="Start" style="font-size:0.8rem;">
-          <input type="time" id="schedule-b2-end" placeholder="End" style="font-size:0.8rem;">
-        </div>
-      </div>
-
-      <div class="form-group" style="min-width: 140px;">
-        <label for="schedule-end-time">Shift End</label>
-        <input type="time" id="schedule-end-time">
-      </div>
-      
-      <div class="form-group" style="min-width: 140px;">
-        <label for="schedule-end-date-shift">Shift End Date</label>
-        <input type="date" id="schedule-end-date-shift">
-        <small>If overnight</small>
-      </div>
-    </div>
-
-    <button type="button" class="btn-primary" onclick="submitSchedule()">Submit Schedule(s)</button>
-  </form>
-  <div id="schedule-status" class="status-message"></div>
+          
+          <form id="csv-import-form" class="form-container">
+            <h2>Bulk Schedule Importer (CSV)</h2>
+            <p class="text-color-secondary" style="font-size: 0.9rem;">
+              Upload a CSV with headers: <code>Name</code>, <code>StartDate</code>, <code>ShiftStartTime</code>, <code>EndDate</code>, <code>ShiftEndTime</code>, <code>LeaveType</code>, <code>agent email</code>
+            </p>
+            <button 
+              type="button" 
+              class="btn-secondary" 
+              style="margin-bottom: 20px; max-width: 300px;" 
+              onclick="downloadScheduleTemplate()">
+              Download CSV Template
+            </button>
+            <div class="form-group">
+              <label for="csv-file-input">Select CSV File</label>
+              <input type="file" id="csv-file-input" accept=".csv">
+            </div>
+            <button type="button" class="btn-primary" onclick="importScheduleCSV()">Import CSV</button>
+          </form>
+          <div id="csv-import-status" class="status-message"></div>
+          
+          <hr class="section-divider">
+          
+          <form id="schedule-form" class="form-container">
+            <h2>Manual Schedule Editor</h2>
+            <div class="form-group">
+  <label>User</label>
+  <div id="schedule-agent-select-container"></div>
 </div>
+            <div class="form-row">
+              <div class="form-group"><label for="schedule-start-date">Start Date</label><input type="date" id="schedule-start-date" required></div>
+              <div class="form-group"><label for="schedule-end-date">End Date (Optional)</label><input type="date" id="schedule-end-date"><small>Leave blank to submit for a single day.</small></div>
+            </div>
+            <div class="form-group"><label for="schedule-leave-type">Leave Type / Status</label><select id="schedule-leave-type" onchange="toggleTimeFields()"><option value="Present">Present</option><option value="Sick">Sick</option><option value="Annual">Annual</option><option value="Casual">Casual</option><option value="Absent">Absent</option><option value="Day Off">Day Off</option></select></div>
+            
+            <div id="time-fields" class="form-row">
+              <div class="form-group">
+                <label for="schedule-start-time">Shift Start Time</label>
+                <input type="time" id="schedule-start-time">
+              </div>
+              <div class="form-group">
+                <label for="schedule-end-date-shift">Shift End Date</label>
+                <input type="date" id="schedule-end-date-shift">
+                <small>Only fill if shift ends on a different day.</small>
+              </div>
+              <div class="form-group">
+                <label for="schedule-end-time">Shift End Time</label>
+                <input type="time" id="schedule-end-time">
+              </div>
+            </div>
+            <button type="button" class="btn-primary" onclick="submitSchedule()">Submit Schedule(s)</button>
+          </form>
+          <div id="schedule-status" class="status-message"></div>
+        </div>
         
         <!-- ================================== -->
         <!--   TAB 6: LEAVE APPROVALS PANEL     -->
@@ -1805,19 +1798,6 @@ body.dark-mode .dropdown-option.selected {
     <button type="button" class="btn-primary" onclick="submitManualPunch()">Submit Manual Punch</button>
   </form>
   <div id="manual-punch-status" class="status-message"></div>
-  
-  <hr class="section-divider">
-  
-  <div class="form-container">
-    <h3>WFM Break Configuration</h3>
-    <p class="text-color-secondary">Define allowed durations for each break type.</p>
-    <table class="report-table" id="break-config-table">
-      <thead><tr><th>Project</th><th>Type</th><th>Duration (Min)</th><th>Is Paid?</th><th>Action</th></tr></thead>
-      <tbody id="break-config-body"></tbody>
-    </table>
-    <button class="btn-secondary" onclick="addBreakRuleRow()" style="margin-top:10px;">+ Add Rule</button>
-    <button class="btn-primary" onclick="saveBreakConfig()">Save Configuration</button>
-  </div>
   
   <hr class="section-divider">
   
@@ -1920,27 +1900,16 @@ body.dark-mode .dropdown-option.selected {
           
           <div id="dashboard-grid">
             <div class="dashboard-card full-width">
-              <h3>Live Team Status</h3>
-              <div style="overflow-x: auto;">
-                <table class="report-table" id="live-status-table">
-                  <thead>
-                    <tr>
-                      <th>Agent</th>
-                      <th>Current Status</th>
-                      <th>Duration</th>
-                      <th>Schedule</th>
-                      <th>Adherence Flags</th>
-                    </tr>
-                  </thead>
-                  <tbody id="live-status-body">
-                    </tbody>
-                </table>
-              </div>
+              <h3>Agent Status (Real-Time)</h3>
+              <div id="status-agent-list" class="chart-container"></div>
             </div>
-            
             <div class="dashboard-card full-width">
-              <h3>Shift Metrics</h3>
+              <h3>Adherence Details (Today)</h3>
               <div id="adherence-detail-table" class="dashboard-list-container"></div>
+            </div>
+            <div class="dashboard-card full-width">
+              <h3>Pending Leave Requests (for selected users)</h3>
+              <div id="pending-leave-table" class="dashboard-list-container"></div>
             </div>
           </div>
         </div>
@@ -2459,7 +2428,8 @@ body.dark-mode .dropdown-option.selected {
       const PLANNED_BREAK_SECONDS = 15 * 60; // 15 minutes
       const PLANNED_LUNCH_SECONDS = 30 * 60; // 30 minutes
       let selfUserName = ""; 
-      let selfRole = "agent"; 
+      let selfRole = "agent";
+      let selfEmail = ""; 
       let allUsersList = []; 
       let allAdminsList = []; 
       let lastHistoryData = null;
@@ -2566,10 +2536,10 @@ body.dark-mode .dropdown-option.selected {
       }
       // *** NEW HELPER FUNCTION to add in <script> tag ***
       function setAllPunchButtonsDisabled(disabled) {
-        document.querySelectorAll('#buttons button, #other-buttons button').forEach(btn => {
-          btn.disabled = disabled;
-        });
-      }
+  document.querySelectorAll('#buttons button, #other-buttons button').forEach(btn => {
+    btn.disabled = disabled;
+  });
+}
       // === TAB SWITCHING FUNCTION ===
 function showTab(tabName) {
   // Hide all panels
@@ -2703,49 +2673,48 @@ function populateUserInfo(user) {
     return;
   }
 
+  // 1. Set Global State
   selfUserName = user.name; 
+  selfEmail = user.email; // <--- Capture Email
   selfRole = user.role; 
   allUsersList = user.allUsers; 
   allAdminsList = user.allAdmins; 
   
   document.body.setAttribute('data-role', user.role);
   
+  // 2. Handle Pending Status
   if (user.accountStatus === 'Pending') {
     infoDiv.innerHTML = `<strong>Status:</strong> Pending Approval`;
     document.getElementById('app-sidebar').style.display = 'none';
     document.getElementById('punch-panel').innerHTML = `<h2>Pending</h2><p>Please wait for approval.</p>`;
-    if (user.isNewUser) showSupervisorModal(allAdminsList);
-    else loadMyRegistrationStatus();
+    if (user.isNewUser && typeof showSupervisorModal === 'function') showSupervisorModal(allAdminsList);
+    else if (typeof loadMyRegistrationStatus === 'function') loadMyRegistrationStatus();
     return;
   }
 
+  // 3. Display User Info
   infoDiv.innerHTML = `<strong>User:</strong> ${user.name} | <strong>Role:</strong> ${user.role}`;
   infoDiv.className = '';
   
   document.getElementById('buttons').style.display = 'block';
   document.getElementById('other-buttons').style.display = 'block';
 
-  // --- PERMISSIONS LOGIC ---
+  // 4. Permission-based UI
   const can = (perm) => user.permissions && user.permissions.includes(perm);
-
   const setDisplay = (id, condition) => {
       const el = document.getElementById(id);
       if(el) el.style.display = condition ? 'inline-block' : 'none';
   };
 
-  // 1. Agent Tools (Visible to Everyone)
+  // Visibility Logic
   setDisplay('my-schedule-tab-button', true);
   setDisplay('history-report-tab-button', true);
   setDisplay('coaching-tab-button', true);
+  setDisplay('overtime-tab-button', true);
   
-  setDisplay('overtime-tab-button', true); // Visible to all (Agents request, Managers approve)
-  
-  // 2. Management Tools (RBAC)
   setDisplay('dashboard-tab-button', can('VIEW_FULL_DASHBOARD'));
   setDisplay('leave-approval-tab-button', can('APPROVE_LEAVE'));
   setDisplay('reporting-line-tab-button', can('MANAGE_HIERARCHY'));
-
-  // 3. Admin Tools (RBAC)
   setDisplay('finance-admin-tab-button', can('MANAGE_FINANCE'));
   setDisplay('schedule-tab-button', can('EDIT_SCHEDULE'));
   setDisplay('project-admin-tab-button', can('MANAGE_PROJECTS'));
@@ -2754,13 +2723,12 @@ function populateUserInfo(user) {
   setDisplay('registration-admin-tab-button', can('HIRE_EMPLOYEE'));
   setDisplay('announcements-admin-tab-button', can('MANAGE_ANNOUNCEMENTS'));
   setDisplay('recruitment-tab-button', can('MANAGE_RECRUITMENT'));
-  
-  // 4. HR Admin (New Phase 7)
-  setDisplay('hr-admin-tab-button', can('OFFBOARD_EMPLOYEE')); // Visible to HR/Superadmin
-  
-  // Specific Logic for Panels
+  setDisplay('hr-admin-tab-button', can('OFFBOARD_EMPLOYEE'));
+
+  // 5. Panel Setup
   if (can('PUNCH_OTHERS')) {
       document.getElementById('admin-panel').style.display = 'block';
+      // Populate with "Myself" logic
       populateAdminDropdown(allUsersList, selfUserName, 'agent-select', 'Punch for: Myself');
   }
   
@@ -2768,9 +2736,10 @@ function populateUserInfo(user) {
       populateAdminDropdown(allUsersList, selfUserName, 'schedule-agent-select', 'Select a user');
   }
 
+  // 6. Load Initial Data
   if (user.myBalances) populateMyBalances(user.myBalances);
   if (user.currentStatus) updateCurrentStatus(user.currentStatus);
-  loadMyRequests();
+  if (typeof loadMyRequests === 'function') loadMyRequests();
 }
 
       function loadUserInfo() { 
@@ -2917,42 +2886,56 @@ function populateAdminDropdown(users, selfName, dropdownId, selfText) {
         document.getElementById('balance-casual').textContent = balances.casual;
       }
 
-      function punch(action) {
-        const adminSelect = document.getElementById('agent-select');
-        let targetUserName = '';
-        
-        if (selfRole === 'admin' || selfRole === 'superadmin') {
-          const selectedEmail = adminSelect.value;
-          const user = allUsersList.find(u => u.email === selectedEmail);
-          targetUserName = user ? user.name : '';
-        } else {
-          targetUserName = selfUserName;
-        }
-        
-        if (!targetUserName) { 
-           setStatus('status', 'error', 'Please select a user to punch for.');
-           return;
-        }
+function punch(action) {
+  const adminSelect = document.getElementById('agent-select');
+  let targetUserName = '';
+  
+  // Logic: If admin, check dropdown. If dropdown empty/default, use self.
+  if (selfRole === 'admin' || selfRole === 'superadmin') {
+    const selectedEmail = adminSelect.value;
+    if (selectedEmail) {
+        const user = allUsersList.find(u => u.email === selectedEmail);
+        targetUserName = user ? user.name : selfUserName;
+    } else {
+        targetUserName = selfUserName;
+    }
+  } else {
+    targetUserName = selfUserName;
+  }
+  
+  if (!targetUserName) { 
+     setStatus('status', 'error', 'Could not identify user. Please reload the page.');
+     return;
+  }
 
-        setStatus('status', 'processing', `Processing "${action}" for ${targetUserName}...`);
+  // Project Logic
+  const projectSelect = document.getElementById('current-project-select');
+  const projectId = projectSelect.value;
 
-        google.script.run
-          .withSuccessHandler(response => { // <-- 'msg' is now 'response'
-            // 'response' is now an object { message: "...", newStatus: {...} }
-            if (response.message.startsWith('Error:')) {
-              setStatus('status', 'error', response.message.replace('Error: ', ''));
-            } else {
-              setStatus('status', 'success', response.message);
-            }
-            // --- ADD THIS LINE ---
-            updateCurrentStatus(response.newStatus); 
-            // --- END ADDITION ---
-          })
-          .withFailureHandler(err => {
-            setStatus('status', 'error', 'Unexpected error: ' + (err.message || JSON.stringify(err)));
-          })
-          .webPunch(action, targetUserName, null);
+  if ((action === 'Login' || action === 'Switch Project') && !projectId) {
+    setStatus('status', 'error', 'Please select a Project before punching.');
+    return;
+  }
+
+  setStatus('status', 'processing', `Processing "${action}" for ${targetUserName}...`);
+
+  google.script.run
+    .withSuccessHandler(response => {
+      if (response.message.startsWith('Error:')) {
+        setStatus('status', 'error', response.message.replace('Error: ', ''));
+      } else {
+        setStatus('status', 'success', response.message);
       }
+      // Update UI only if we punched for ourselves
+      if (targetUserName === selfUserName) {
+          updateCurrentStatus(response.newStatus); 
+      }
+    })
+    .withFailureHandler(err => {
+      setStatus('status', 'error', 'Unexpected error: ' + err.message);
+    })
+    .webPunch(action, targetUserName, null, projectId); 
+}
       
       // REPLACE this function in your <script> tag
 function toggleTimeFields() {
@@ -2969,57 +2952,53 @@ function toggleTimeFields() {
   }
 }
       
-
+     // REPLACE this function in your <script> tag
 function submitSchedule() {
   try {
     const userEmail = document.getElementById('schedule-agent-select').value;
-    // Handle case where allUsersList might not be fully loaded yet
     const user = allUsersList.find(u => u.email === userEmail);
-    const userName = user ? user.name : userEmail; // Fallback
-    
-    if (!userEmail) throw new Error("Please select a user."); 
+    if (!user) throw new Error("Please select a user."); 
     
     let startDate = document.getElementById('schedule-start-date').value;
-    let endDateRange = document.getElementById('schedule-end-date').value;
+    let endDateRange = document.getElementById('schedule-end-date').value; // This is the date *range*
     const leaveType = document.getElementById('schedule-leave-type').value;
-    
-    // Standard Times
     let startTime = document.getElementById('schedule-start-time').value;
     let endTime = document.getElementById('schedule-end-time').value;
+    
+    // *** NEW: Read the SHIFT end date ***
     let shiftEndDate = document.getElementById('schedule-end-date-shift').value;
-
-    // New Break Windows
-    const windows = {
-      b1s: document.getElementById('schedule-b1-start').value,
-      b1e: document.getElementById('schedule-b1-end').value,
-      ls:  document.getElementById('schedule-lunch-start').value,
-      le:  document.getElementById('schedule-lunch-end').value,
-      b2s: document.getElementById('schedule-b2-start').value,
-      b2e: document.getElementById('schedule-b2-end').value
-    };
     
     if (!startDate) throw new Error("Please select a Start Date.");
-    if (!endDateRange) endDateRange = startDate;
+    if (!endDateRange) endDateRange = startDate; // Default range to single day
+    if (new Date(endDateRange) < new Date(startDate)) throw new Error("End Date of range cannot be before Start Date.");
     
     if (leaveType === 'Present') {
-      if (!startTime || !endTime) throw new Error("Shift Start and End Time are required for Present status.");
+      if (!startTime || !endTime) throw new Error("Shift Start and End Time are required for 'Present' status.");
+      // If shiftEndDate is blank, it will be handled by the server
     } else {
-      startTime = ""; endTime = ""; shiftEndDate = "";
-      // Clear windows if not present
-      for(let k in windows) windows[k] = "";
+      startTime = "";
+      endTime = "";
+      shiftEndDate = ""; // Clear shift end date if not present
     }
     
-    setStatus('schedule-status', 'processing', `Submitting schedule for ${userName}...`);
+    setStatus('schedule-status', 'processing', `Submitting schedule for ${user.name}...`);
 
     google.script.run
       .withSuccessHandler(msg => {
-        setStatus('schedule-status', 'success', msg);
-        document.getElementById('schedule-form').reset();
-        document.getElementById('schedule-start-date').valueAsDate = new Date();
-        toggleTimeFields();
+        if (msg.startsWith('Error:')) {
+          setStatus('schedule-status', 'error', msg.replace('Error: ', ''));
+        } else {
+          setStatus('schedule-status', 'success', msg);
+          document.getElementById('schedule-form').reset();
+          document.getElementById('schedule-start-date').valueAsDate = new Date();
+          toggleTimeFields();
+        }
       })
-      .withFailureHandler(err => setStatus('schedule-status', 'error', err.message))
-      .webSubmitScheduleRange(userEmail, userName, startDate, endDateRange, startTime, endTime, leaveType, shiftEndDate, windows); 
+      .withFailureHandler(err => {
+        setStatus('schedule-status', 'error', 'Unexpected error: ' + (err.message || JSON.stringify(err)));
+      })
+      // *** MODIFIED: Pass shiftEndDate to the new function signature ***
+      .webSubmitScheduleRange(userEmail, user.name, startDate, endDateRange, startTime, endTime, leaveType, shiftEndDate); 
 
   } catch (err) {
     setStatus('schedule-status', 'error', err.message);
@@ -3067,29 +3046,28 @@ function submitSchedule() {
       }
 
       // --- NEW: Dynamic Status Timer ---
-      let statusTimer = null;
+et statusTimer = null;
 
 function updateCurrentStatus(statusInfo) {
   if (statusTimer) clearInterval(statusTimer);
 
   const displayDiv = document.getElementById('current-status-display');
   
-  // Handle Logged Out
+  // 1. Handle Logged Out State
   if (!statusInfo || !statusInfo.status || statusInfo.status === 'Logged Out') {
     displayDiv.style.visibility = 'hidden';
+    
+    // Enable Login, Disable Everything Else
     setAllPunchButtonsDisabled(true);
-    document.querySelector('button[onclick="punch(\'Login\')"]').disabled = false;
+    const loginBtn = document.querySelector('button[onclick="punch(\'Login\')"]');
+    if (loginBtn) loginBtn.disabled = false;
+    
     return;
   }
 
   const punchTime = new Date(statusInfo.time);
   
-  // *** PHASE 8 LOGIC: Calculate Shift End ***
-  let shiftEnd = null;
-  if (statusInfo.schedule && statusInfo.schedule.end) {
-    shiftEnd = new Date(statusInfo.schedule.end);
-  }
-
+  // 2. Start Timer
   const updateText = () => {
     const now = new Date();
     const diffMs = now.getTime() - punchTime.getTime();
@@ -3103,9 +3081,8 @@ function updateCurrentStatus(statusInfo) {
     let statusClass = getStatusClass(statusInfo.status);
     if (statusInfo.status === 'Logged In') statusClass = 'Logged-In';
 
+    // Exceed Check
     let warningMsg = "";
-    
-    // 1. Break Exceed Logic
     let plannedSeconds = 0;
     if (statusInfo.status === 'On First Break' || statusInfo.status === 'On Last Break') plannedSeconds = PLANNED_BREAK_SECONDS;
     else if (statusInfo.status === 'On Lunch') plannedSeconds = PLANNED_LUNCH_SECONDS;
@@ -3114,21 +3091,8 @@ function updateCurrentStatus(statusInfo) {
       const ex_m = Math.floor((diffSec - plannedSeconds) / 60);
       const ex_s = (diffSec - plannedSeconds) % 60;
       warningMsg = ` <strong style="color: var(--status-leave-text);">(Exceeded by ${ex_m}m ${ex_s}s)</strong>`;
-      displayDiv.className = `status-message visible status-leave`; // Red flash
-    } 
-    // 2. *** PHASE 8: Overtime Logic ***
-    else if (statusInfo.status === 'Logged In' && shiftEnd && now > shiftEnd) {
-      const otMs = now.getTime() - shiftEnd.getTime();
-      const otSec = Math.floor(otMs / 1000);
-      const otH = Math.floor(otSec / 3600);
-      const otM = Math.floor((otSec % 3600) / 60);
-      
-      warningMsg = ` <strong style="color: #d97706;">(OVERTIME: ${otH}h ${otM}m)</strong>`;
-      // Override class to indicate overtime (Yellow/Orange)
-      displayDiv.className = `status-message visible status-pending`; 
-    } 
-    else {
-      // Normal state
+      displayDiv.className = `status-message visible status-leave`;
+    } else {
       displayDiv.className = `status-message visible status-${statusClass}`;
     }
 
@@ -3141,16 +3105,24 @@ function updateCurrentStatus(statusInfo) {
   updateText(); 
   statusTimer = setInterval(updateText, 1000);
 
-  // Button Logic (Unchanged)
+  // 3. Button Logic
   if (statusInfo.status === 'Logged In') {
+    // Enable all buttons EXCEPT Login
     setAllPunchButtonsDisabled(false);
-    document.querySelector('button[onclick="punch(\'Login\')"]').disabled = true;
-  } else if (statusInfo.status.startsWith('On ')) {
+    const loginBtn = document.querySelector('button[onclick="punch(\'Login\')"]');
+    if (loginBtn) loginBtn.disabled = true;
+  } 
+  else if (statusInfo.status.startsWith('On ')) {
+    // Disable all buttons EXCEPT the matching 'Out' button
     setAllPunchButtonsDisabled(true);
     const type = statusInfo.status.replace('On ', '');
     const map = {
-      'First Break': 'First Break Out', 'Lunch': 'Lunch Out', 'Last Break': 'Last Break Out',
-      'Coaching': 'Coaching Out', 'Meeting': 'Meeting Out', 'Personal': 'Personal Out'
+      'First Break': 'First Break Out', 
+      'Lunch': 'Lunch Out', 
+      'Last Break': 'Last Break Out',
+      'Coaching': 'Coaching Out', 
+      'Meeting': 'Meeting Out', 
+      'Personal': 'Personal Out'
     };
     if (map[type]) {
        const btn = document.querySelector(`button[onclick="punch('${map[type]}')"]`);
@@ -4435,118 +4407,185 @@ function populateHistoryReport(data) {
           // This function is now deprecated in favor of using the global state in saveCurrentSelection
           return currentDashboardSelection.emails;
       }
-      
-      let dashboardInterval = null; // Global variable to control the timer
 
-function drawDashboard(data) {
-  // 1. Error Handling
-  if (!data || data.error) {
-    setStatus('dashboard-status', 'error', data ? data.error : 'Failed to load dashboard data.');
-    document.getElementById('live-status-body').innerHTML = '<tr><td colspan="5" class="text-color-secondary" style="text-align:center;">Error loading data.</td></tr>';
-    return;
-  }
-  
-  setStatus('dashboard-status', 'success', 'Dashboard live.');
-  
-  const tbody = document.getElementById('live-status-body');
-  tbody.innerHTML = '';
-  
-  // 2. Clear any existing timer to prevent duplicates
+      // [index.html] Add to Script
+
+let dashboardInterval = null;
+
+// 1. Start the Interval
+function startDashboardTimers() {
   if (dashboardInterval) clearInterval(dashboardInterval);
   
-  const agentsWithTimers = []; // Array to track who needs a live timer
+  // Update every second
+  dashboardInterval = setInterval(updateDashboardTimers, 1000);
+  updateDashboardTimers(); // Run immediately
+}
 
-  // 3. Render Rows
-  data.agentStatusList.forEach(agent => {
-    const statusClass = getStatusClass(agent.status);
+// 2. The Logic Loop
+function updateDashboardTimers() {
+  const timers = document.querySelectorAll('.live-timer');
+  const now = new Date();
+  
+  timers.forEach(timer => {
+    const startTimeStr = timer.getAttribute('data-start');
+    const limitSec = parseInt(timer.getAttribute('data-limit'), 10) || 0;
     
-    // --- Schedule Column Logic ---
-    let scheduleInfo = `<span class="text-color-secondary">Off</span>`;
-    if (agent.schedule) {
-        if (agent.schedule.start && agent.schedule.end) {
-            scheduleInfo = `${agent.schedule.start} - ${agent.schedule.end}`;
-        } else if (agent.schedule.leaveType && agent.schedule.leaveType !== 'Present' && agent.schedule.leaveType !== 'Day Off') {
-            scheduleInfo = `<span class="status-leave">${agent.schedule.leaveType}</span>`;
-        }
+    if (!startTimeStr || startTimeStr === 'null') {
+      timer.textContent = '';
+      return;
     }
-
-    // --- Adherence Flags Logic ---
-    let flags = [];
-    if (agent.metrics.tardy > 0) flags.push(`<span class="status-tag status-leave" title="Late by ${formatSeconds(agent.metrics.tardy)}">Late</span>`);
-    if (agent.metrics.early > 0) flags.push(`<span class="status-tag status-leave" title="Left early by ${formatSeconds(agent.metrics.early)}">Left Early</span>`);
     
-    // Server-side Exceed Flags (Historical for the day)
-    if (agent.metrics.lunchExceed > 0) flags.push(`<span class="status-tag status-leave">Lunch Exc.</span>`);
-    if (agent.metrics.b1Exceed > 0 || agent.metrics.b2Exceed > 0) flags.push(`<span class="status-tag status-leave">Break Exc.</span>`);
-
-    const row = document.createElement('tr');
-    // Create unique ID for timer cell based on email to be safe
-    const safeId = agent.email.replace(/[^a-zA-Z0-9]/g, '');
+    const startTime = new Date(startTimeStr);
+    const diffMs = now - startTime;
+    const diffSec = Math.floor(diffMs / 1000);
     
-    row.innerHTML = `
-      <td><strong>${agent.name}</strong></td>
-      <td><span class="status-tag status-${statusClass}">${agent.status}</span></td>
-      <td id="timer-${safeId}" style="font-family: monospace; font-size: 1.1rem;">--:--</td>
-      <td>${scheduleInfo}</td>
-      <td>${flags.join(' ') || '<span class="text-color-secondary">-</span>'}</td>
-    `;
-    tbody.appendChild(row);
-
-    // Add to timer list if they are currently active
-    if (agent.lastActionTime && agent.status !== 'Logged Out') {
-      // Determine allowed duration for this status from Break Config
-      // Status matches "On First Break", "On Lunch" -> key "First Break", "Lunch"
-      const breakType = agent.status.replace('On ', '');
-      const allowedDuration = data.breakRules ? data.breakRules[breakType] : 0;
-
-      agentsWithTimers.push({
-        id: `timer-${safeId}`,
-        start: agent.lastActionTime, // Timestamp from server
-        status: agent.status,
-        allowedDuration: allowedDuration // Minutes (0 if not a break or no rule)
-      });
+    if (diffSec < 0) { timer.textContent = "00:00:00"; return; }
+    
+    // Format Time
+    const h = Math.floor(diffSec / 3600).toString().padStart(2, '0');
+    const m = Math.floor((diffSec % 3600) / 60).toString().padStart(2, '0');
+    const s = Math.floor(diffSec % 60).toString().padStart(2, '0');
+    
+    timer.textContent = `${h}:${m}:${s}`;
+    
+    // Check Exceedance (Only if limit > 0)
+    if (limitSec > 0 && diffSec > limitSec) {
+      timer.classList.add('exceeded');
+      const exceedSec = diffSec - limitSec;
+      const em = Math.floor(exceedSec / 60);
+      const es = exceedSec % 60;
+      // Optional: Append Exceed Time
+      // timer.textContent += ` (+${em}m ${es}s)`; 
+    } else {
+      timer.classList.remove('exceeded');
+      timer.classList.add('active');
     }
   });
-
-  // 4. Start Client-Side Interval (Updates every 1 second)
-  dashboardInterval = setInterval(() => {
-    const now = new Date().getTime();
-    
-    agentsWithTimers.forEach(item => {
-      const el = document.getElementById(item.id);
-      if (el) {
-        const diffSec = Math.floor((now - item.start) / 1000);
-        
-        // Format: HH:MM:SS
-        const h = Math.floor(diffSec / 3600);
-        const m = Math.floor((diffSec % 3600) / 60);
-        const s = diffSec % 60;
-        
-        let timeStr = '';
-        if (h > 0) {
-            timeStr = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-        } else {
-            timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-        }
-        
-        // Check for Real-Time Exceeding
-        let isExceeded = false;
-        if (item.allowedDuration > 0) {
-           // allowedDuration is in minutes, diffSec is seconds
-           if (diffSec > (item.allowedDuration * 60)) {
-               isExceeded = true;
-           }
-        }
-        
-        if (isExceeded) {
-           el.innerHTML = `<span style="color: #dc2626; font-weight: 700;">${timeStr}</span>`;
-        } else {
-           el.innerHTML = timeStr;
-        }
-      }
-    });
-  }, 1000);
 }
+      
+      function drawDashboard(data) {
+        // Explicitly check for data existence and validity for each section
+        if (!data || data.error) {
+          setStatus('dashboard-status', 'error', data.error || 'Failed to load dashboard data.');
+          document.getElementById('status-agent-list').innerHTML = '<p class="text-color-secondary">Error loading data.</p>'; 
+          document.getElementById('pending-leave-table').innerHTML = '<p class="text-color-secondary">Error loading data.</p>';
+          document.getElementById('adherence-detail-table').innerHTML = '<p class="text-color-secondary">Error loading data.</p>';
+          return;
+        }
+        
+        setStatus('dashboard-status', 'success', 'Dashboard loaded successfully.');
+        
+        // --- 1. Draw Status Agent List ---
+        // --- 1. Draw Status Agent List ---
+        const statusAgentDiv = document.getElementById('status-agent-list');
+        let statusHtml = '';
+
+        if (!data.agentStatusList || data.agentStatusList.length === 0) {
+             statusHtml = '<p class="text-color-secondary">No user status information available.</p>';
+        } else {
+             data.agentStatusList.forEach(agent => {
+                  const statusClass = getStatusClass(agent.status);
+                  
+                  // Determine if we should show a timer for this status
+                  const showTimer = agent.status !== 'Logged Out' && agent.status !== 'Day Off' && agent.status !== 'Pending Login' && agent.status !== 'Absent' && agent.time;
+                  
+                  const timerHtml = showTimer 
+                    ? `<span class="live-timer" data-start="${agent.time}" data-limit="${agent.limit || 0}">Loading...</span>` 
+                    : '';
+
+                  statusHtml += `
+                      <div class="agent-status-item">
+                          <strong>${agent.name}</strong>
+                          <div style="display:flex; align-items:center;">
+                            ${timerHtml}
+                            <span class="status-tag status-${statusClass}" style="margin-left:10px;">${agent.status}</span>
+                          </div>
+                      </div>
+                  `;
+             });
+        }
+        statusAgentDiv.innerHTML = statusHtml;
+
+        // *** CRITICAL: Trigger the timer loop ***
+        startDashboardTimers();
+
+
+        // --- 2. Draw Adherence Detail List ---
+        const adherenceDetailDiv = document.getElementById('adherence-detail-table');
+        let adherenceHtml = '';
+        
+        if (!data.individualAdherenceMetrics || data.individualAdherenceMetrics.length === 0) {
+            adherenceHtml = '<p class="text-color-secondary">No adherence data found for selected users today (No logins recorded).</p>';
+        } else {
+            // Filter users with zero deviation and sort by deviation (worst offenders first)
+            const filteredMetrics = data.individualAdherenceMetrics.filter(user => {
+                 const deviation = user.tardy + user.earlyLeave + user.breakExceed + user.lunchExceed;
+                 return deviation > 0 || user.overtime > 0;
+            });
+            
+            filteredMetrics.sort((a, b) => {
+                 // Sort primarily by negative deviation (Tardy, Early, Breaks)
+                 const aNegDeviation = a.tardy + a.earlyLeave + a.breakExceed + a.lunchExceed;
+                 const bNegDeviation = b.tardy + b.earlyLeave + b.breakExceed + b.lunchExceed;
+                 
+                 if (bNegDeviation !== aNegDeviation) {
+                    return bNegDeviation - aNegDeviation;
+                 }
+                 
+                 // Secondary sort by Overtime
+                 return b.overtime - a.overtime;
+            });
+            
+            if (filteredMetrics.length === 0) {
+                adherenceHtml = '<p class="text-color-secondary">All selected users have perfect adherence today. Great job!</p>';
+            } else {
+                filteredMetrics.forEach(user => {
+                    const totalBreakExceed = (parseInt(user.breakExceed, 10) || 0) + (parseInt(user.lunchExceed, 10) || 0);
+                    adherenceHtml += `
+                        <div class="dashboard-detail-item">
+                            <h4 class="detail-label" style="grid-column: 1 / -1; margin: 0; padding-bottom: 5px; border-bottom: 1px solid var(--border-color); color: var(--konecta-blue);">${user.name}</h4>
+                            
+                            <span class="detail-label">Tardy:</span>
+                            <span class="detail-value">${formatColoredSeconds(user.tardy, false)}</span>
+                            
+                            <span class="detail-label">Early Leave:</span>
+                            <span class="detail-value">${formatColoredSeconds(user.earlyLeave, false)}</span>
+                            
+                            <span class="detail-label">Overtime:</span>
+                            <span class="detail-value">${formatColoredSeconds(user.overtime, true)}</span>
+                            
+                            <span class="detail-label">Break Exceed:</span>
+                            <span class="detail-value">${formatColoredSeconds(totalBreakExceed, false)}</span>
+                            
+                        </div>
+                    `;
+                });
+            }
+        }
+        adherenceDetailDiv.innerHTML = adherenceHtml;
+
+
+        // --- 3. Draw Pending Leave List ---
+        const pendingLeaveDiv = document.getElementById('pending-leave-table');
+        let pendingLeaveHtml = '';
+        
+        if (!data.pendingRequests || data.pendingRequests.length === 0) {
+             pendingLeaveHtml = '<p class="text-color-secondary">No pending leave requests for selected users.</p>';
+        } else {
+            data.pendingRequests.forEach(req => {
+                pendingLeaveHtml += `
+                    <div class="dashboard-leave-item">
+                        <div class="item-details">
+                            <h4>${req.name} - ${req.type}</h4>
+                            <p><strong>Dates:</strong> ${formatDate(req.startDate)} (${req.days} days)</p>
+                        </div>
+                         <span class="status-badge status-pending">Pending</span>
+                    </div>
+                `;
+            });
+        }
+        pendingLeaveDiv.innerHTML = pendingLeaveHtml;
+      }
       
       // Function to get the current list of emails from the selection state
       function saveMyTeam() {
@@ -6320,53 +6359,6 @@ function saveProject() {
     .webSaveProject(data);
 }
 
-// *** IMPORTANT: OVERRIDE THE OLD punch() FUNCTION ***
-// We need to pass the selected project ID to the backend
-function punch(action) {
-  const adminSelect = document.getElementById('agent-select');
-  let targetUserName = '';
-  
-  if (selfRole === 'admin' || selfRole === 'superadmin') {
-    const selectedEmail = adminSelect.value;
-    const user = allUsersList.find(u => u.email === selectedEmail);
-    targetUserName = user ? user.name : '';
-  } else {
-    targetUserName = selfUserName;
-  }
-  
-  if (!targetUserName) { 
-     setStatus('status', 'error', 'Please select a user to punch for.');
-     return;
-  }
-
-  // --- PHASE 3 CHANGE ---
-  const projectSelect = document.getElementById('current-project-select');
-  const projectId = projectSelect.value;
-
-  // If Logging In or Switching, Project is Mandatory
-  if ((action === 'Login' || action === 'Switch Project') && !projectId) {
-    setStatus('status', 'error', 'Please select a Project before punching.');
-    return;
-  }
-  // ----------------------
-
-  setStatus('status', 'processing', `Processing "${action}" for ${targetUserName}...`);
-
-  google.script.run
-    .withSuccessHandler(response => {
-      if (response.message.startsWith('Error:')) {
-        setStatus('status', 'error', response.message.replace('Error: ', ''));
-      } else {
-        setStatus('status', 'success', response.message);
-      }
-      updateCurrentStatus(response.newStatus); 
-    })
-    .withFailureHandler(err => {
-      setStatus('status', 'error', 'Unexpected error: ' + err.message);
-    })
-    // Pass projectId as the 4th argument (null is for adminTimestamp)
-    .webPunch(action, targetUserName, null, projectId); 
-}
 
 // ==========================================
       // === PHASE 4: RECRUITMENT JS FUNCTIONS ===
@@ -7407,51 +7399,6 @@ function actionOvertime(id, action) {
     })
     .withFailureHandler(err => alert(err.message))
     .webActionOvertime(id, action, comment, null);
-}
-
-function loadBreakConfig() {
-  google.script.run.withSuccessHandler(renderBreakConfig).webGetBreakConfig();
-}
-
-function renderBreakConfig(rules) {
-  const tbody = document.getElementById('break-config-body');
-  tbody.innerHTML = '';
-  rules.forEach(r => addBreakRuleRow(r));
-}
-
-function addBreakRuleRow(data = {}) {
-  const tbody = document.getElementById('break-config-body');
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td><input type="text" class="brk-project" value="${data.project || 'All'}" style="width:100px;"></td>
-    <td>
-      <select class="brk-type">
-        <option value="First Break" ${data.type==='First Break'?'selected':''}>First Break</option>
-        <option value="Lunch" ${data.type==='Lunch'?'selected':''}>Lunch</option>
-        <option value="Last Break" ${data.type==='Last Break'?'selected':''}>Last Break</option>
-      </select>
-    </td>
-    <td><input type="number" class="brk-duration" value="${data.duration || 15}" style="width:60px;"></td>
-    <td><select class="brk-paid"><option value="TRUE" ${data.isPaid==='TRUE'?'selected':''}>Yes</option><option value="FALSE" ${data.isPaid==='FALSE'?'selected':''}>No</option></select></td>
-    <td><button class="deny-btn" style="padding:2px 8px;" onclick="this.closest('tr').remove()">X</button></td>
-  `;
-  tbody.appendChild(tr);
-}
-
-function saveBreakConfig() {
-  const rows = document.querySelectorAll('#break-config-body tr');
-  const newRules = [];
-  rows.forEach(row => {
-    newRules.push({
-      project: row.querySelector('.brk-project').value,
-      type: row.querySelector('.brk-type').value,
-      duration: row.querySelector('.brk-duration').value,
-      isPaid: row.querySelector('.brk-paid').value,
-      deduct: row.querySelector('.brk-paid').value === 'FALSE' ? 'TRUE' : 'FALSE'
-    });
-  });
-  
-  google.script.run.withSuccessHandler(alert).webSaveBreakConfig(newRules);
 }
 
 
