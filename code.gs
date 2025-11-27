@@ -1705,9 +1705,7 @@ function getUserDataFromDb(ss) {
 
 
 /**
- * NEW: Finds the latest adherence or other code punch for a user 
- * on a given shift date and determines their current logical status.
- * UPDATED PHASE 1: Now returns schedule info for the frontend.
+ * UPDATED PHASE 2: Returns Status + Login Time for Timers
  */
 function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
   const ss = getSpreadsheet();
@@ -1716,6 +1714,8 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
   
   let lastAdherencePunch = null;
   let lastAdherenceTime = new Date(0);
+  let loginTime = null; // <--- NEW: Track Login Time specifically
+  
   let lastOtherPunch = null;
   let lastOtherTime = new Date(0);
 
@@ -1724,6 +1724,12 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
   for (let i = adherenceData.length - 1; i > 0; i--) {
     const row = adherenceData[i];
     if (row[1] === userName && Utilities.formatDate(new Date(row[0]), Session.getScriptTimeZone(), "MM/dd/yyyy") === formattedDate) {
+      
+      // Capture Login Time (Column C, Index 2)
+      if (row[2] && row[2] instanceof Date) {
+        loginTime = row[2];
+      }
+
       const punches = [
         { name: "Login", time: row[2] },
         { name: "First Break In", time: row[3] },
@@ -1777,21 +1783,17 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
     lastPunchTime = lastOtherTime;
   }
 
-  // Get Schedule Info regardless of punch status
   const scheduleInfo = getScheduleForDate(userEmail, shiftDate);
-
   if (!lastPunchName) {
-    return { status: "Logged Out", time: null, schedule: scheduleInfo };
+    return { status: "Logged Out", time: null, loginTime: null, schedule: scheduleInfo };
   }
 
   // 4. Determine logical *current* status
   let currentStatus = "Logged Out";
   if (lastPunchName.endsWith(" In")) {
-    // Handle "Login" specifically, others are "On X"
     if (lastPunchName === "Login") {
        currentStatus = "Logged In";
     } else {
-       // e.g., "First Break In" -> "On First Break", "Meeting In" -> "On Meeting"
        currentStatus = "On " + lastPunchName.replace(" In", "");
     }
   } else if (lastPunchName.endsWith(" Out") && lastPunchName !== "Logout") {
@@ -1803,6 +1805,7 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
   return {
     status: currentStatus,
     time: convertDateToString(lastPunchTime),
+    loginTime: convertDateToString(loginTime), // <--- Sending this to frontend
     schedule: scheduleInfo
   };
 }
