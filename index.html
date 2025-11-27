@@ -6443,54 +6443,7 @@ function saveProject() {
     .webSaveProject(data);
 }
 
-// *** IMPORTANT: OVERRIDE THE OLD punch() FUNCTION ***
-// We need to pass the selected project ID to the backend
-function punch(action) {
-  const adminSelect = document.getElementById('agent-select');
-  let targetUserName = '';
-  
-  if (selfRole === 'admin' || selfRole === 'superadmin') {
-    const selectedEmail = adminSelect.value;
-    const user = allUsersList.find(u => u.email === selectedEmail);
-    targetUserName = user ? user.name : '';
-  } else {
-    targetUserName = selfUserName;
-  }
-  
-  if (!targetUserName) { 
-     setStatus('status', 'error', 'Please select a user to punch for.');
-     return;
-  }
 
-  // --- PHASE 3 CHANGE ---
-  const projectSelect = document.getElementById('current-project-select');
-  const projectId = projectSelect.value;
-
-  // If Logging In or Switching, Project is Mandatory
-  if ((action === 'Login' || action === 'Switch Project') && !projectId) {
-    // THIS LINE ENSURES YOU SEE THE ERROR
-    setStatus('status', 'error', 'Please select a Project before punching.');
-    return;
-  }
-  // ----------------------
-
-  setStatus('status', 'processing', `Processing "${action}" for ${targetUserName}...`);
-
-  google.script.run
-    .withSuccessHandler(response => {
-      if (response.message.startsWith('Error:')) {
-        setStatus('status', 'error', response.message.replace('Error: ', ''));
-      } else {
-        setStatus('status', 'success', response.message);
-      }
-      updateCurrentStatus(response.newStatus); 
-    })
-    .withFailureHandler(err => {
-      setStatus('status', 'error', 'Unexpected error: ' + err.message);
-    })
-    // Pass projectId as the 4th argument (null is for adminTimestamp)
-    .webPunch(action, targetUserName, null, projectId); 
-}
 
 // ==========================================
       // === PHASE 4: RECRUITMENT JS FUNCTIONS ===
