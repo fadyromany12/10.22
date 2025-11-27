@@ -1258,8 +1258,41 @@ body.dark-mode .dropdown-option.selected {
   font-weight: 600;
 }
 
-      .read-only-field { background-color: #f3f4f6 !important; color: #6b7280 !important; cursor: not-allowed; }
-  .profile-subview { animation: fadeIn 0.3s ease; }
+/* --- Phase 7: Command Center Styles --- */
+      #command-center-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .metric-card {
+        background-color: var(--card-bg);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        box-shadow: var(--shadow-sm);
+        transition: transform 0.2s;
+      }
+      .metric-card:hover { transform: translateY(-2px); }
+      .metric-title { font-size: 0.85rem; color: var(--text-color-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+      .metric-value { font-size: 2rem; font-weight: 700; color: var(--text-color); margin: 8px 0; }
+      .metric-sub { font-size: 0.8rem; color: var(--text-color-secondary); }
+      
+      /* Color coding for metrics */
+      .metric-good { color: #16a34a; } /* Green */
+      .metric-warn { color: #ca8a04; } /* Yellow */
+      .metric-bad { color: #dc2626; }  /* Red */
+
+.status-offline { background-color: #e5e7eb; color: #374151; }
+body.dark-mode .status-offline { background-color: #374151; color: #9ca3af; }
+
+.read-only-field { background-color: #f3f4f6 !important; color: #6b7280 !important; cursor: not-allowed; }
+.profile-subview { animation: fadeIn 0.3s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
       
     </style>
@@ -1780,6 +1813,21 @@ body.dark-mode .dropdown-option.selected {
   <div id="manual-punch-status" class="status-message"></div>
   
   <hr class="section-divider">
+
+  <div id="break-config-section">
+    <h2>Break Configuration (Global)</h2>
+    <p class="text-color-secondary" style="margin: -16px 0 16px 0;">Define the standard and maximum allowed durations (in seconds) for breaks.</p>
+    
+    <div id="break-config-container" class="form-container">
+      <p class="text-color-secondary">Loading configuration...</p>
+    </div>
+    <div style="margin-top: 10px; text-align: right;">
+        <button type="button" class="btn-primary" onclick="saveBreakConfig()">Save Configuration</button>
+    </div>
+    <div id="break-config-status" class="status-message"></div>
+  </div>
+  
+  <hr class="section-divider">
   
   <div id="balance-adjustment-section" style="display: none;"> 
       <form id="balance-adjustment-form" class="form-container">
@@ -1877,7 +1925,30 @@ body.dark-mode .dropdown-option.selected {
           <div id="dashboard-status" class="status-message"></div>
           
           <hr class="section-divider">
-          
+
+          <div id="command-center-stats">
+            <div class="metric-card">
+              <span class="metric-title">Real-Time Capacity</span>
+              <span class="metric-value" id="metric-capacity">--%</span>
+              <span class="metric-sub" id="metric-capacity-sub">0/0 Agents</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Schedule Adherence</span>
+              <span class="metric-value" id="metric-adherence">--%</span>
+              <span class="metric-sub">Target: 95%</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Current Shrinkage</span>
+              <span class="metric-value" id="metric-shrinkage">--%</span>
+              <span class="metric-sub" id="metric-shrinkage-sub">0 Unavailable</span>
+            </div>
+            <div class="metric-card" style="cursor: pointer;" onclick="exportDashboardCSV()">
+              <span class="metric-title">Export Data</span>
+              <span class="metric-value" style="font-size: 1.5rem;">📥 CSV</span>
+              <span class="metric-sub">Download Report</span>
+            </div>
+          </div>
+
           <div id="dashboard-grid">
             <div class="dashboard-card full-width">
               <h3>Agent Status (Real-Time)</h3>
@@ -2405,8 +2476,10 @@ body.dark-mode .dropdown-option.selected {
 
     <script>
       // --- MODIFIED PHASE 3: Changed const to let for dynamic updates ---
-      let PLANNED_BREAK_SECONDS = 15 * 60; // Default fallback
-      let PLANNED_LUNCH_SECONDS = 30 * 60; // Default fallback
+      let PLANNED_BREAK_SECONDS = 15 * 60; 
+      let PLANNED_LUNCH_SECONDS = 30 * 60;
+      let OT_PRE_THRESHOLD = 300; // Default 5 mins
+      let OT_POST_THRESHOLD = 300; // Default 5 mins
       let selfUserName = "";
       let selfRole = "agent"; 
       let allUsersList = []; 
@@ -2576,6 +2649,14 @@ function showTab(tabName) {
       loadHrAdmin(); // New Phase 7 Function
     } else if (tabName === 'overtime') {
     loadOvertimeTab();
+    } else if (tabName === 'admin-tools') {
+      // ... existing dropdown population ...
+      populateAdminDropdown(allUsersList, selfUserName, 'manual-punch-user', 'Select User');
+      // ... other dropdowns ...
+      
+      // NEW: Load Break Config
+      loadBreakConfig();
+    
     }
   }
 
@@ -2653,9 +2734,11 @@ function populateUserInfo(user) {
   }
   // --- NEW PHASE 3: Update Break Rules from Backend ---
   if (user.breakRules) {
-    PLANNED_BREAK_SECONDS = user.breakRules.break1; // or break2, assuming they are same
+    PLANNED_BREAK_SECONDS = user.breakRules.break1; 
     PLANNED_LUNCH_SECONDS = user.breakRules.lunch;
-    console.log(`Break Rules Loaded: Break=${PLANNED_BREAK_SECONDS}s, Lunch=${PLANNED_LUNCH_SECONDS}s`);
+    OT_PRE_THRESHOLD = user.breakRules.otPre;
+    OT_POST_THRESHOLD = user.breakRules.otPost;
+    console.log(`Rules Loaded: Break=${PLANNED_BREAK_SECONDS}s, Lunch=${PLANNED_LUNCH_SECONDS}s, OT_Pre=${OT_PRE_THRESHOLD}s, OT_Post=${OT_POST_THRESHOLD}s`);
   }
 
   selfUserName = user.name; 
@@ -3100,12 +3183,16 @@ function submitSchedule() {
           else if (statusInfo.status === 'Logged In' && shiftEnd && now > shiftEnd) {
             const otMs = now.getTime() - shiftEnd.getTime();
             const otSec = Math.floor(otMs / 1000);
-            const otH = Math.floor(otSec / 3600);
-            const otM = Math.floor((otSec % 3600) / 60);
-            warningMsg = ` <strong style="color: #d97706;">(OVERTIME: ${otH}h ${otM}m)</strong>`;
-            statusClass = 'pending';
-          } 
-
+            
+            // Only warn if above threshold
+            if (otSec > OT_POST_THRESHOLD) {
+                const otH = Math.floor(otSec / 3600);
+                const otM = Math.floor((otSec % 3600) / 60);
+                warningMsg = ` <strong style="color: #d97706;">(OVERTIME: ${otH}h ${otM}m)</strong>`;
+                statusClass = 'pending';
+            }
+          }
+          
           // --- PHASE 5: Calculate & Display Net Hours ---
           let netHoursHtml = "";
           if (loginTime) {
@@ -3133,22 +3220,42 @@ function submitSchedule() {
         statusTimer = setInterval(updateText, 1000);
       }
       
-      // REPLACE this function in your <script> tag
+      // --- PHASE 6: Enhanced Visuals ---
 function getStatusClass(status) {
-    // Converts status string to CSS class format
-    const formatted = status.replace(/[\s\/-]/g, '-');
+    if (!status) return 'logged-out';
+    const s = status.toLowerCase();
     
-    // *** ADD "Day-Off" to this list ***
-    if (formatted === 'Not-Scheduled' || formatted === 'Day-Off') {
-        return 'Pending-Login'; // Reuse yellow style
-    }
-    // Fallback for any leave types that weren't grouped
-    if (['Sick', 'Annual', 'Casual'].includes(formatted)) {
-        return 'On-Leave';
-    }
+    // Green: Working
+    if (s === 'logged in' || s === 'present') return 'approved'; 
     
-    return formatted;
+    // Yellow: Breaks
+    if (s.includes('break') || s.includes('lunch') || s.includes('meeting') || s.includes('coaching')) return 'pending';
+    
+    // Red: Issues
+    if (s.includes('absent') || s.includes('sick') || s.includes('leave')) return 'denied';
+    
+    // Gray: Offline
+    if (s === 'logged out' || s === 'day off' || s === 'day-off') return 'offline'; // We will add .status-offline CSS below
+    
+    return 'pending'; // Default fallback
 }
+
+// Helper to add icons to status text
+function formatStatusWithIcon(status) {
+    if (!status) return status;
+    const s = status.toLowerCase();
+    
+    if (s === 'logged in') return '🟢 Logged In';
+    if (s.includes('first break')) return '☕ On First Break';
+    if (s.includes('last break')) return '☕ On Last Break';
+    if (s.includes('lunch')) return '🍽️ On Lunch';
+    if (s.includes('coaching')) return '🎓 Coaching';
+    if (s.includes('meeting')) return '📅 Meeting';
+    if (s === 'logged out') return '⚫ Logged Out';
+    
+    return status;
+}
+
 
       function formatColoredSeconds(seconds, isPositive) {
           if (typeof seconds !== 'number' || isNaN(seconds) || seconds === 0) {
@@ -3689,8 +3796,7 @@ function populateHistoryReport(data) {
           <th>Logout</th>
           <th>Tardy</th>
           <th>Early Leave</th>
-          <th>Overtime</th>
-          <th>Break Exceed</th>
+          <th>Pre-Shift OT</th> <th>Post-Shift OT</th> <th>Break Exceed</th>
           <th>Lunch Exceed</th>
         </tr>
       </thead>
@@ -3718,7 +3824,7 @@ function populateHistoryReport(data) {
         <td>${formatTime(row.logout)}</td>
         <td>${formatExceed(row.tardy, false)}</td>
         <td>${formatExceed(row.earlyLeave, false)}</td>
-        <td>${formatExceed(row.overtime, true)}</td>
+        <td>${formatExceed(row.preShiftOvertime, true)}</td> <td>${formatExceed(row.overtime, true)}</td>
         <td>${formatExceed(totalBreakExceed, false)}</td>
         <td>${formatExceed(row.lunchExceed, false)}</td>
       </tr>
@@ -3976,30 +4082,23 @@ function populateHistoryReport(data) {
       }
 
       // --- NEW: Function to download the CSV template ---
+      // --- PHASE 9: Updated CSV Template ---
       function downloadScheduleTemplate() {
-        // *** MODIFIED: Headers match the new 7-column format ***
-        const headers = "Name,StartDate,ShiftStartTime,EndDate,ShiftEndTime,LeaveType,agent email";
+        const headers = "Name,StartDate,ShiftStartTime,EndDate,ShiftEndTime,LeaveType,agent email,Break1Start,Break1End,LunchStart,LunchEnd,Break2Start,Break2End";
         
-        // *** MODIFIED: Examples match the new 7-column format ***
-        const example1 = "John Doe,11/30/2025,09:00,11/30/2025,18:00,Present,john.doe@konecta.com";
-        const example2 = "Jane Smith,11/30/2025,,,,Sick,jane.smith@konecta.com";
-        const example3 = "Peter Jones,12/01/2025,22:00,12/02/2025,06:00,Present,peter.jones@konecta.com,,(Overnight shift example)";
+        const example1 = "John Doe,11/30/2025,09:00,11/30/2025,18:00,Present,john.doe@konecta.com,11:00,11:15,13:00,13:30,16:00,16:15";
+        const example2 = "Jane Smith,11/30/2025,,,,Sick,jane.smith@konecta.com,,,,,,";
+        const example3 = "Peter Jones,12/01/2025,14:00,12/01/2025,23:00,Present,peter.jones@konecta.com,16:00,16:15,18:00,18:30,21:00,21:15";
         
-        // Combine headers and examples, separated by new lines
         const csvContent = [headers, example1, example2, example3].join("\r\n");
 
-        // Create a "blob" (a file in the browser's memory)
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        
-        // Create a temporary link element
         const link = document.createElement("a");
-        if (link.download !== undefined) { // Check for browser support
+        if (link.download !== undefined) { 
           const url = URL.createObjectURL(blob);
           link.setAttribute("href", url);
-          link.setAttribute("download", "schedule_template.csv");
+          link.setAttribute("download", "schedule_template_v2.csv");
           link.style.visibility = 'hidden';
-          
-          // Add link to the page, click it, and then remove it
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
@@ -4411,98 +4510,109 @@ function populateHistoryReport(data) {
       }
       
       function drawDashboard(data) {
-        // Explicitly check for data existence and validity for each section
         if (!data || data.error) {
           setStatus('dashboard-status', 'error', data.error || 'Failed to load dashboard data.');
-          document.getElementById('status-agent-list').innerHTML = '<p class="text-color-secondary">Error loading data.</p>'; 
-          document.getElementById('pending-leave-table').innerHTML = '<p class="text-color-secondary">Error loading data.</p>';
-          document.getElementById('adherence-detail-table').innerHTML = '<p class="text-color-secondary">Error loading data.</p>';
           return;
         }
         
-        setStatus('dashboard-status', 'success', 'Dashboard loaded successfully.');
+        setStatus('dashboard-status', 'success', 'Dashboard updated.');
         
+        // --- PHASE 7: RENDER METRICS ---
+        if (data.wfmMetrics) {
+          const m = data.wfmMetrics;
+          
+          // Capacity
+          const capEl = document.getElementById('metric-capacity');
+          capEl.innerText = `${m.capacity}%`;
+          capEl.className = 'metric-value ' + (m.capacity < 50 ? 'metric-bad' : (m.capacity < 80 ? 'metric-warn' : 'metric-good'));
+          document.getElementById('metric-capacity-sub').innerText = `${m.working}/${m.scheduled} Agents`;
+
+          // Adherence
+          const adhEl = document.getElementById('metric-adherence');
+          adhEl.innerText = `${m.adherence}%`;
+          adhEl.className = 'metric-value ' + (m.adherence < 85 ? 'metric-bad' : (m.adherence < 95 ? 'metric-warn' : 'metric-good'));
+
+          // Shrinkage
+          const shkEl = document.getElementById('metric-shrinkage');
+          shkEl.innerText = `${m.shrinkage}%`;
+          shkEl.className = 'metric-value ' + (m.shrinkage > 20 ? 'metric-bad' : (m.shrinkage > 10 ? 'metric-warn' : 'metric-good'));
+          document.getElementById('metric-shrinkage-sub').innerText = `${m.unavailable} Unavailable`;
+        }
+        // -------------------------------
+
         // --- 1. Draw Status Agent List ---
         const statusAgentDiv = document.getElementById('status-agent-list');
         let statusHtml = '';
         
         if (!data.agentStatusList || data.agentStatusList.length === 0) {
-             statusHtml = '<p class="text-color-secondary">No user status information available for this date/team.</p>';
+             statusHtml = '<p class="text-color-secondary">No user status information available.</p>';
         } else {
              data.agentStatusList.forEach(agent => {
                   const statusClass = getStatusClass(agent.status);
+                  const displayStatus = formatStatusWithIcon(agent.status);
                   statusHtml += `
                       <div class="agent-status-item">
                           <strong>${agent.name}</strong>
-                          <span class="status-tag status-${statusClass}">${agent.status}</span>
+                          <span class="status-tag status-${statusClass}">${displayStatus}</span>
                       </div>
                   `;
              });
         }
         statusAgentDiv.innerHTML = statusHtml;
 
-
         // --- 2. Draw Adherence Detail List ---
         const adherenceDetailDiv = document.getElementById('adherence-detail-table');
         let adherenceHtml = '';
         
         if (!data.individualAdherenceMetrics || data.individualAdherenceMetrics.length === 0) {
-            adherenceHtml = '<p class="text-color-secondary">No adherence data found for selected users today (No logins recorded).</p>';
+            adherenceHtml = '<p class="text-color-secondary">No adherence data found for selected users today.</p>';
         } else {
-            // Filter users with zero deviation and sort by deviation (worst offenders first)
             const filteredMetrics = data.individualAdherenceMetrics.filter(user => {
-                 const deviation = user.tardy + user.earlyLeave + user.breakExceed + user.lunchExceed;
-                 return deviation > 0 || user.overtime > 0;
+                 // Always show if scheduled, or if there is deviation
+                 return user.scheduled || user.tardy > 0 || user.earlyLeave > 0 || user.overtime > 0;
             });
             
             filteredMetrics.sort((a, b) => {
-                 // Sort primarily by negative deviation (Tardy, Early, Breaks)
-                 const aNegDeviation = a.tardy + a.earlyLeave + a.breakExceed + a.lunchExceed;
-                 const bNegDeviation = b.tardy + b.earlyLeave + b.breakExceed + b.lunchExceed;
-                 
-                 if (bNegDeviation !== aNegDeviation) {
-                    return bNegDeviation - aNegDeviation;
-                 }
-                 
-                 // Secondary sort by Overtime
-                 return b.overtime - a.overtime;
+                 const aDev = a.tardy + a.earlyLeave + a.breakExceed + a.lunchExceed;
+                 const bDev = b.tardy + b.earlyLeave + b.breakExceed + b.lunchExceed;
+                 return bDev - aDev; // Highest deviation first
             });
             
-            if (filteredMetrics.length === 0) {
-                adherenceHtml = '<p class="text-color-secondary">All selected users have perfect adherence today. Great job!</p>';
-            } else {
-                filteredMetrics.forEach(user => {
-                    const totalBreakExceed = (parseInt(user.breakExceed, 10) || 0) + (parseInt(user.lunchExceed, 10) || 0);
-                    adherenceHtml += `
-                        <div class="dashboard-detail-item">
-                            <h4 class="detail-label" style="grid-column: 1 / -1; margin: 0; padding-bottom: 5px; border-bottom: 1px solid var(--border-color); color: var(--konecta-blue);">${user.name}</h4>
-                            
-                            <span class="detail-label">Tardy:</span>
-                            <span class="detail-value">${formatColoredSeconds(user.tardy, false)}</span>
-                            
-                            <span class="detail-label">Early Leave:</span>
-                            <span class="detail-value">${formatColoredSeconds(user.earlyLeave, false)}</span>
-                            
-                            <span class="detail-label">Overtime:</span>
-                            <span class="detail-value">${formatColoredSeconds(user.overtime, true)}</span>
-                            
-                            <span class="detail-label">Break Exceed:</span>
-                            <span class="detail-value">${formatColoredSeconds(totalBreakExceed, false)}</span>
-                            
-                        </div>
-                    `;
-                });
-            }
+            filteredMetrics.forEach(user => {
+                const totalBreakExceed = (parseInt(user.breakExceed, 10) || 0) + (parseInt(user.lunchExceed, 10) || 0);
+                
+                // Traffic Light Logic for Border
+                let borderClass = 'border-left: 4px solid #16a34a;'; // Green
+                const totalDev = user.tardy + user.earlyLeave + totalBreakExceed + user.lunchExceed;
+                if (totalDev > 600) borderClass = 'border-left: 4px solid #dc2626;'; // Red (>10 mins)
+                else if (totalDev > 0) borderClass = 'border-left: 4px solid #ca8a04;'; // Yellow
+
+                adherenceHtml += `
+                    <div class="dashboard-detail-item" style="${borderClass}">
+                        <h4 class="detail-label" style="grid-column: 1 / -1; margin: 0; padding-bottom: 5px; border-bottom: 1px solid var(--border-color); color: var(--text-color);">${user.name}</h4>
+                        
+                        <span class="detail-label">Tardy:</span>
+                        <span class="detail-value">${formatColoredSeconds(user.tardy, false)}</span>
+                        
+                        <span class="detail-label">Early Leave:</span>
+                        <span class="detail-value">${formatColoredSeconds(user.earlyLeave, false)}</span>
+                        
+                        <span class="detail-label">Break Exceed:</span>
+                        <span class="detail-value">${formatColoredSeconds(totalBreakExceed, false)}</span>
+                        
+                        <span class="detail-label">Overtime:</span>
+                        <span class="detail-value">${formatColoredSeconds(user.overtime, true)}</span>
+                    </div>
+                `;
+            });
         }
         adherenceDetailDiv.innerHTML = adherenceHtml;
 
-
-        // --- 3. Draw Pending Leave List ---
+        // --- 3. Draw Pending Leave List (Same as before) ---
         const pendingLeaveDiv = document.getElementById('pending-leave-table');
         let pendingLeaveHtml = '';
-        
         if (!data.pendingRequests || data.pendingRequests.length === 0) {
-             pendingLeaveHtml = '<p class="text-color-secondary">No pending leave requests for selected users.</p>';
+             pendingLeaveHtml = '<p class="text-color-secondary">No pending leave requests.</p>';
         } else {
             data.pendingRequests.forEach(req => {
                 pendingLeaveHtml += `
@@ -4517,6 +4627,48 @@ function populateHistoryReport(data) {
             });
         }
         pendingLeaveDiv.innerHTML = pendingLeaveHtml;
+      }
+
+      // --- PHASE 7: EXPORT FUNCTION ---
+      function exportDashboardCSV() {
+        if (!window.lastDashboardData) {
+          alert("No dashboard data available to export. Please load the dashboard first.");
+          return;
+        }
+        
+        const data = window.lastDashboardData;
+        const dateStr = document.getElementById('dashboard-date').value;
+        let csvContent = "data:text/csv;charset=utf-8,";
+        
+        // 1. Metrics Header
+        csvContent += `Dashboard Report for ${dateStr}\r\n`;
+        csvContent += `Adherence,${data.wfmMetrics.adherence}%\r\n`;
+        csvContent += `Capacity,${data.wfmMetrics.capacity}%\r\n`;
+        csvContent += `Shrinkage,${data.wfmMetrics.shrinkage}%\r\n\r\n`;
+        
+        // 2. Details Header
+        csvContent += "Name,Tardy (sec),Early Leave (sec),Break Exceed (sec),Lunch Exceed (sec),Overtime (sec)\r\n";
+        
+        // 3. Details Rows
+        data.individualAdherenceMetrics.forEach(user => {
+           let row = [
+             `"${user.name}"`,
+             user.tardy,
+             user.earlyLeave,
+             user.breakExceed,
+             user.lunchExceed,
+             user.overtime
+           ].join(",");
+           csvContent += row + "\r\n";
+        });
+        
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `WFM_Dashboard_${dateStr}.csv`);
+        document.body.appendChild(link); 
+        link.click();
+        document.body.removeChild(link);
       }
       
       // Function to get the current list of emails from the selection state
@@ -7373,26 +7525,103 @@ function actionOvertime(id, action) {
     .webActionOvertime(id, action, comment, null);
 }
 
+// --- PHASE 6: BREAK CONFIG EDITOR JS ---
+
+function loadBreakConfig() {
+  const container = document.getElementById('break-config-container');
+  container.innerHTML = '<p class="text-color-secondary">Loading rules...</p>';
+  
+  google.script.run
+    .withSuccessHandler(configs => {
+      let html = '';
+      configs.forEach((conf, index) => {
+        html += `
+          <div class="form-row break-rule-row" style="border-bottom:1px solid var(--border-color); padding-bottom:10px; margin-bottom:10px;">
+            <div class="form-group" style="flex:2;">
+              <label>Break Type</label>
+              <input type="text" class="rule-type" value="${conf.type}" readonly style="background-color: var(--input-bg); font-weight:bold;">
+            </div>
+            <div class="form-group">
+              <label>Default (Sec)</label>
+              <input type="number" class="rule-default" value="${conf.defaultDur}">
+              <small class="text-color-secondary">${Math.floor(conf.defaultDur/60)} mins</small>
+            </div>
+            <div class="form-group">
+              <label>Max Allowed (Sec)</label>
+              <input type="number" class="rule-max" value="${conf.maxDur}">
+              <small class="text-color-secondary">${Math.floor(conf.maxDur/60)} mins</small>
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    })
+    .withFailureHandler(err => {
+      container.innerHTML = `<p class="status-message error visible">${err.message}</p>`;
+    })
+    .webGetBreakConfig();
+}
+
+function saveBreakConfig() {
+  const rows = document.querySelectorAll('.break-rule-row');
+  const newConfigs = [];
+  
+  rows.forEach(row => {
+    newConfigs.push({
+      type: row.querySelector('.rule-type').value,
+      defaultDur: row.querySelector('.rule-default').value,
+      maxDur: row.querySelector('.rule-max').value
+    });
+  });
+  
+  setStatus('break-config-status', 'processing', 'Saving configuration...');
+  
+  google.script.run
+    .withSuccessHandler(msg => {
+      setStatus('break-config-status', 'success', msg);
+      // Refresh user info silently to apply new rules to the current session immediately
+      google.script.run.withSuccessHandler(user => populateUserInfo(user)).getUserInfo();
+    })
+    .withFailureHandler(err => {
+      setStatus('break-config-status', 'error', err.message);
+    })
+    .webSaveBreakConfig(newConfigs);
+}
+
 
       // Initialize
       document.addEventListener("DOMContentLoaded", function() {
         loadUserInfo(); 
-        document.getElementById('schedule-start-date').valueAsDate = new Date();
-        document.getElementById('leave-start-date').valueAsDate = new Date();
-        document.getElementById('history-start-date').valueAsDate = new Date(); 
-        document.getElementById('history-end-date').valueAsDate = new Date(); 
-        document.getElementById('manual-punch-date').valueAsDate = new Date(); 
-        document.getElementById('admin-leave-start-date').valueAsDate = new Date(); 
-        document.getElementById('dashboard-date').valueAsDate = new Date();
         
-        // NEW: Coaching form init
-        document.getElementById('coaching-session-date').valueAsDate = new Date();
+        // --- PHASE 6: AUTO-REFRESH ---
+        // Refresh data every 60 seconds to keep the dashboard and status live
+        setInterval(() => {
+            if (!document.hidden) { // Only refresh if tab is visible
+                console.log("Auto-refreshing data...");
+                refreshCurrentData();
+            }
+        }, 60000);
+        // -----------------------------
+
+        // Set default dates
+        const today = new Date();
+        document.getElementById('schedule-start-date').valueAsDate = today;
+        document.getElementById('leave-start-date').valueAsDate = today;
+        document.getElementById('history-start-date').valueAsDate = today; 
+        document.getElementById('history-end-date').valueAsDate = today; 
+        document.getElementById('manual-punch-date').valueAsDate = today; 
+        document.getElementById('admin-leave-start-date').valueAsDate = today; 
+        document.getElementById('dashboard-date').valueAsDate = today;
+        document.getElementById('coaching-session-date').valueAsDate = today;
+        
+        // Event Listeners
         document.getElementById('coaching-session-date').addEventListener('change', updateWeekNumber);
+        
+        // Initial Loads
         loadTemplateList();
         updateWeekNumber();
         calculateOverallScore();
         loadProjectsDropdown();
-
         toggleTimeFields();
       });
    </script>
