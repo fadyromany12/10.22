@@ -1219,7 +1219,9 @@ function getUserInfo() {
     const breakRules = {
       break1: getBreakConfig("First Break").default,
       lunch: getBreakConfig("Lunch").default,
-      break2: getBreakConfig("Last Break").default
+      break2: getBreakConfig("Last Break").default,
+      otPre: getBreakConfig("Overtime Pre-Shift").default, // Phase 8
+      otPost: getBreakConfig("Overtime Post-Shift").default // Phase 8
     };
 
     return {
@@ -1240,7 +1242,7 @@ function getUserInfo() {
 }
 
 
-// ================= PUNCH MAIN FUNCTION (PHASE 5 UPDATED) =================
+// ================= PUNCH MAIN FUNCTION (PHASE 8 UPDATED) =================
 function punch(action, targetUserName, puncherEmail, adminTimestamp) { 
   const ss = getSpreadsheet();
   const adherenceSheet = getOrCreateSheet(ss, SHEET_NAMES.adherence);
@@ -1338,7 +1340,7 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     }
   } catch (e) { logsSheet.appendRow([new Date(), userName, userEmail, "Break Exceed Calc Error", e.message]); }
 
-  // Phase 4: Break Window Validation (On 'In' Punch)
+  // Break Window Validation
   let violation = "No";
   const scheduleData = scheduleSheet.getDataRange().getValues();
   let shiftStartDateObj = null, shiftEndDateObj = null;
@@ -1365,33 +1367,53 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   if (action === "First Break In" && schedBreak1 && checkWindow(nowTimestamp, schedBreak1)) violation = "Yes";
   else if (action === "Lunch In" && schedLunch && checkWindow(nowTimestamp, schedLunch)) violation = "Yes";
   else if (action === "Last Break In" && schedBreak2 && checkWindow(nowTimestamp, schedBreak2)) violation = "Yes";
-  
   if (violation === "Yes") adherenceSheet.getRange(row, 22).setValue("Yes");
 
-  // Shift Metrics
+  // --- PHASE 8 UPDATE: SHIFT METRICS (OVERTIME THRESHOLD) ---
   if (shiftStartDateObj) {
+    // 1. LOGIN Actions (Tardy & Pre-Shift Overtime)
     if (action === "Login" || (punches.login && !adherenceSheet.getRange(row, 11).getValue())) {
        const loginTime = action === "Login" ? nowTimestamp : punches.login;
-       const diff = timeDiffInSeconds(shiftStartDateObj, loginTime);
-       adherenceSheet.getRange(row, 11).setValue(diff > 0 ? diff : 0); 
+       const diff = timeDiffInSeconds(shiftStartDateObj, loginTime); // Positive = Tardy, Negative = Early
+       
+       if (diff > 0) {
+         adherenceSheet.getRange(row, 11).setValue(diff); // Tardy
+       } else {
+         adherenceSheet.getRange(row, 11).setValue(0);
+         // Check Pre-Shift Overtime (Early Start)
+         const earlySec = Math.abs(diff);
+         const threshold = getBreakConfig("Overtime Pre-Shift").default;
+         if (earlySec > threshold) {
+           adherenceSheet.getRange(row, 24).setValue(earlySec); // New Col 24
+         }
+       }
     }
+    
+    // 2. LOGOUT Actions (Early Leave & Post-Shift Overtime)
     if ((action === "Logout" || punches.logout) && shiftEndDateObj) {
        const logoutTime = action === "Logout" ? nowTimestamp : punches.logout;
-       const diff = timeDiffInSeconds(shiftEndDateObj, logoutTime);
+       const diff = timeDiffInSeconds(shiftEndDateObj, logoutTime); // Positive = Overtime, Negative = Early Leave
+       
        if (diff > 0) {
-         adherenceSheet.getRange(row, 12).setValue(diff); 
-         adherenceSheet.getRange(row, 13).setValue(0);    
+         // Check Post-Shift Overtime Threshold
+         const threshold = getBreakConfig("Overtime Post-Shift").default;
+         if (diff > threshold) {
+           adherenceSheet.getRange(row, 12).setValue(diff); // Post Overtime
+         } else {
+           adherenceSheet.getRange(row, 12).setValue(0); // Ignore if below threshold
+         }
+         adherenceSheet.getRange(row, 13).setValue(0);
        } else {
          adherenceSheet.getRange(row, 12).setValue(0);
-         adherenceSheet.getRange(row, 13).setValue(Math.abs(diff));
+         adherenceSheet.getRange(row, 13).setValue(Math.abs(diff)); // Early Leave
        }
     }
   }
 
-  // --- PHASE 5: NET LOGIN HOURS CALCULATION ---
+  // Net Login Hours
   if (action === "Logout" && punches.login) {
     const netHours = calculateNetHours(punches);
-    adherenceSheet.getRange(row, 23).setValue(netHours); // Col W (23)
+    adherenceSheet.getRange(row, 23).setValue(netHours);
   }
 
   return `${userName}: ${action} recorded at ${Utilities.formatDate(nowTimestamp, timeZone, "HH:mm:ss")}`;
@@ -1474,41 +1496,50 @@ if (result === "UPDATED") daysUpdated++;
   return `Schedule submission complete for ${userName}. Days processed: ${daysProcessed} (Updated: ${daysUpdated}, Created: ${daysCreated}).`;
 }
 
-// REPLACE this function
-// (Helper for above)
-function updateOrAddSingleSchedule(scheduleSheet, userScheduleMap, logsSheet, userEmail, userName, shiftStartDate, shiftEndDate, targetDateStr, startTime, endTime, leaveType, puncherEmail) {
+// Helper for Import & Manual Submit (PHASE 9 UPDATED)
+function updateOrAddSingleSchedule(
+  scheduleSheet, userScheduleMap, logsSheet, 
+  userEmail, userName, shiftStartDate, shiftEndDate, targetDateStr, 
+  startTime, endTime, leaveType, puncherEmail,
+  // New Optional Args
+  b1s = "", b1e = "", ls = "", le = "", b2s = "", b2e = ""
+) {
   
   const existingRow = userScheduleMap[targetDateStr];
   let startTimeObj = startTime ? new Date(`1899-12-30T${startTime}`) : "";
   let endTimeObj = endTime ? new Date(`1899-12-30T${endTime}`) : "";
-  
-  // *** MODIFIED: Set EndDate (Col D) to null if not "Present" ***
   let endDateObj = (leaveType === 'Present' && endTimeObj) ? shiftEndDate : "";
 
-  // *** MODIFIED: Write to 7 columns ***
+  // Convert break strings to Date objects if they exist
+  const toDateObj = (t) => t ? new Date(`1899-12-30T${t}`) : "";
+  
+  // --- PHASE 9: Write 13 Columns ---
   const rowData = [[
-    userName,     // A
+    userName,       // A
     shiftStartDate, // B
     startTimeObj,   // C
     endDateObj,     // D
     endTimeObj,     // E
     leaveType,      // F
-    userEmail       // G
+    userEmail,      // G
+    toDateObj(b1s), // H (Break1 Start)
+    toDateObj(b1e), // I (Break1 End)
+    toDateObj(ls),  // J (Lunch Start)
+    toDateObj(le),  // K (Lunch End)
+    toDateObj(b2s), // L (Break2 Start)
+    toDateObj(b2e)  // M (Break2 End)
   ]];
 
   if (existingRow) {
-    // *** MODIFIED: Write 7 columns ***
-    scheduleSheet.getRange(existingRow, 1, 1, 7).setValues(rowData);
-    logsSheet.appendRow([new Date(), userName, puncherEmail, "Schedule UPDATE", `Set to: ${leaveType}, ${startTime}-${endTime}`]);
+    scheduleSheet.getRange(existingRow, 1, 1, 13).setValues(rowData);
+    logsSheet.appendRow([new Date(), userName, puncherEmail, "Schedule UPDATE", `Set to: ${leaveType}`]);
     return "UPDATED";
   } else {
-    // *** MODIFIED: Append 7 columns ***
     scheduleSheet.appendRow(rowData[0]);
-    logsSheet.appendRow([new Date(), userName, puncherEmail, "Schedule CREATE", `Set to: ${leaveType}, ${startTime}-${endTime}`]);
+    logsSheet.appendRow([new Date(), userName, puncherEmail, "Schedule CREATE", `Set to: ${leaveType}`]);
     return "CREATED";
   }
 }
-
 
 // ================= HELPER FUNCTIONS =================
 
@@ -1972,12 +2003,15 @@ function getOrCreateSheet(ss, name) {
       sheet.getRange("B:B").setNumberFormat("yyyy-mm-dd");
       sheet.setFrozenRows(1);
     }
+    // --- PHASE 8 UPDATE: Added Overtime Rules ---
     else if (name === SHEET_NAMES.breakConfig) {
       sheet.getRange("A1:D1").setValues([["BreakType", "DefaultDuration (Sec)", "MaxDuration (Sec)", "ProjectID"]]);
-      sheet.getRange("A2:D4").setValues([
+      sheet.getRange("A2:D6").setValues([
         ["First Break", 900, 1200, "ALL"], 
         ["Lunch", 1800, 2400, "ALL"],      
-        ["Last Break", 900, 1200, "ALL"]   
+        ["Last Break", 900, 1200, "ALL"],
+        ["Overtime Pre-Shift", 300, 0, "ALL"],  // 5 mins threshold
+        ["Overtime Post-Shift", 300, 0, "ALL"]  // 5 mins threshold
       ]);
       sheet.setFrozenRows(1);
     }
@@ -2005,9 +2039,9 @@ function getOrCreateSheet(ss, name) {
       sheet.getRange("E:E").setNumberFormat("hh:mm");
       sheet.getRange("H:M").setNumberFormat("hh:mm");
     } 
-    // --- PHASE 5 UPDATE: Added NetLoginHours Column (Col W / 23) ---
+    // --- PHASE 8 UPDATE: Added PreShiftOvertime Column (Col X / 24) ---
     else if (name === SHEET_NAMES.adherence) {
-      sheet.getRange("A1:W1").setValues([["Date", "User Name", "Login", "First Break In", "First Break Out", "Lunch In", "Lunch Out", "Last Break In", "Last Break Out", "Logout", "Tardy (Seconds)", "Overtime (Seconds)", "Early Leave (Seconds)", "Leave Type", "Admin Audit", "—", "1st Break Exceed", "Lunch Exceed", "Last Break Exceed", "Absent", "Admin Code", "BreakWindowViolation", "NetLoginHours"]]);
+      sheet.getRange("A1:X1").setValues([["Date", "User Name", "Login", "First Break In", "First Break Out", "Lunch In", "Lunch Out", "Last Break In", "Last Break Out", "Logout", "Tardy (Seconds)", "Overtime (Seconds)", "Early Leave (Seconds)", "Leave Type", "Admin Audit", "—", "1st Break Exceed", "Lunch Exceed", "Last Break Exceed", "Absent", "Admin Code", "BreakWindowViolation", "NetLoginHours", "PreShiftOvertime"]]);
       sheet.getRange("C:J").setNumberFormat("hh:mm:ss");
     } 
     else if (name === SHEET_NAMES.logs) {
@@ -2574,6 +2608,7 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
             firstBreakExceed: row[16] || 0,
             lunchExceed: row[17] || 0,
             lastBreakExceed: row[18] || 0,
+            preShiftOvertime: row[23] || 0,
             otherCodes: [] // This property was unused, but keeping for consistency
           });
           // *** NEW: Add to lookup ***
@@ -2761,31 +2796,29 @@ function adjustLeaveBalance(adminEmail, userEmail, leaveType, amount, reason) {
   return `Successfully adjusted ${userName}'s ${leaveType} balance from ${currentBalance} to ${newBalance}.`;
 }
 
-// REPLACE this function
+// ================= PHASE 9: BULK SCHEDULE IMPORTER =================
 function importScheduleCSV(adminEmail, csvData) {
   const ss = getSpreadsheet();
   const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
   const userData = getUserDataFromDb(dbSheet);
   const adminRole = userData.emailToRole[adminEmail] || 'agent';
-  if (adminRole !== 'admin' && adminRole !== 'superadmin') {
-    throw new Error("Permission denied. Only admins can import schedules.");
+  if (adminRole !== 'admin' && adminRole !== 'superadmin' && adminRole !== 'manager') {
+    throw new Error("Permission denied. Only admins/managers can import schedules.");
   }
   
   const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
   const scheduleData = scheduleSheet.getDataRange().getValues();
   const logsSheet = getOrCreateSheet(ss, SHEET_NAMES.logs);
-  const timeZone = Session.getScriptTimeZone(); // *** ADDED: Get timezone ***
+  const timeZone = Session.getScriptTimeZone();
   
-  // Build a map of existing schedules
+  // Build map of existing schedules
   const userScheduleMap = {};
   for (let i = 1; i < scheduleData.length; i++) {
     const rowEmail = scheduleData[i][6];
     const rowDateRaw = scheduleData[i][1]; 
     if (rowEmail && rowDateRaw) {
       const email = rowEmail.toLowerCase();
-      if (!userScheduleMap[email]) {
-        userScheduleMap[email] = {};
-      }
+      if (!userScheduleMap[email]) userScheduleMap[email] = {};
       const rowDate = new Date(rowDateRaw);
       const rowDateStr = Utilities.formatDate(rowDate, timeZone, "MM/dd/yyyy");
       userScheduleMap[email][rowDateStr] = i + 1;
@@ -2799,59 +2832,55 @@ function importScheduleCSV(adminEmail, csvData) {
 
   for (const row of csvData) {
     try {
-      // *** MODIFIED: Read new 7-column CSV headers ***
       const userName = row.Name;
       const userEmail = (row['agent email'] || "").toLowerCase();
       
-      // *** MODIFIED: Use new parsers ***
       const targetStartDate = parseDate(row.StartDate);
       let startTime = parseCsvTime(row.ShiftStartTime, timeZone);
       const targetEndDate = parseDate(row.EndDate);
       let endTime = parseCsvTime(row.ShiftEndTime, timeZone);
-      // *** END MODIFICATION ***
+      
+      // --- PHASE 9: Parse New Break Windows ---
+      let b1s = parseCsvTime(row.Break1Start, timeZone);
+      let b1e = parseCsvTime(row.Break1End, timeZone);
+      let ls = parseCsvTime(row.LunchStart, timeZone);
+      let le = parseCsvTime(row.LunchEnd, timeZone);
+      let b2s = parseCsvTime(row.Break2Start, timeZone);
+      let b2e = parseCsvTime(row.Break2End, timeZone);
       
       let leaveType = row.LeaveType || "Present";
       
-      if (!userName || !userEmail) {
-        throw new Error("Missing required field (Name or agent email).");
-      }
+      if (!userName || !userEmail) throw new Error("Missing Name or agent email.");
+      if (!targetStartDate || isNaN(targetStartDate.getTime())) throw new Error(`Invalid StartDate: ${row.StartDate}.`);
       
-      // *** MODIFIED: Check parsed date ***
-      if (!targetStartDate || isNaN(targetStartDate.getTime())) {
-        throw new Error(`Invalid or missing StartDate: ${row.StartDate}.`);
-      }
-      
-      // *** NEW: Format startDateStr from parsed date ***
       const startDateStr = Utilities.formatDate(targetStartDate, timeZone, "MM/dd/yyyy");
 
-      // If leave type is not Present, clear times
       if (leaveType.toLowerCase() !== "present") {
-        startTime = "";
-        endTime = "";
+        startTime = ""; endTime = "";
+        b1s = ""; b1e = ""; ls = ""; le = ""; b2s = ""; b2e = "";
       }
 
-      // *** MODIFIED: Handle parsed EndDate ***
       let finalEndDate;
       if (leaveType.toLowerCase() === "present" && targetEndDate && !isNaN(targetEndDate.getTime())) {
-        finalEndDate = targetEndDate; // Use the valid, parsed EndDate
+        finalEndDate = targetEndDate;
       } else {
-        finalEndDate = new Date(targetStartDate); // Default to StartDate
+        finalEndDate = new Date(targetStartDate);
       }
-      // *** END MODIFICATION ***
 
       const emailMap = userScheduleMap[userEmail] || {};
+      
       const result = updateOrAddSingleSchedule(
-        scheduleSheet, emailMap, logsSheet,
-        userEmail, userName,
-        targetStartDate, // shiftStartDate (Col B) - Now a Date object
-        finalEndDate,    // shiftEndDate (Col D) - Now a Date object
-        startDateStr,    // targetDateStr (for lookup) - Now a formatted string
-        startTime, endTime, leaveType, adminEmail // Times are now HH:mm:ss strings
-      );
+      scheduleSheet, userScheduleMap, logsSheet,
+      userEmail, userName, 
+      currentDate, 
+      shiftEndDate, 
+      currentDateStr, 
+      startTime, endTime, leaveType, puncherEmail,
+      "", "", "", "", "", "" // <--- Pass empty break windows for manual entry
+    );
       
       if (result === "UPDATED") daysUpdated++;
       if (result === "CREATED") daysCreated++;
-
     } catch (e) {
       errors++;
       errorLog.push(`Row ${row.Name}/${row.StartDate}: ${e.message}`);
@@ -2861,17 +2890,16 @@ function importScheduleCSV(adminEmail, csvData) {
   if (errors > 0) {
     return `Error: Import complete with ${errors} errors. (Created: ${daysCreated}, Updated: ${daysUpdated}). Errors: ${errorLog.join(' | ')}`;
   }
-  
   return `Import successful. Records Created: ${daysCreated}, Records Updated: ${daysUpdated}.`;
 }
 
-// REPLACE this function
+// ================= PHASE 7: DASHBOARD ANALYTICS =================
 function getDashboardData(adminEmail, userEmails, date) {
   const ss = getSpreadsheet();
   const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
   const userData = getUserDataFromDb(dbSheet);
   const adminRole = userData.emailToRole[adminEmail] || 'agent';
-  if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+  if (adminRole !== 'admin' && adminRole !== 'superadmin' && adminRole !== 'manager') {
     throw new Error("Permission denied.");
   }
   
@@ -2879,138 +2907,150 @@ function getDashboardData(adminEmail, userEmails, date) {
   const targetDate = new Date(date);
   const targetDateStr = Utilities.formatDate(targetDate, timeZone, "MM/dd/yyyy");
   const targetUserSet = new Set(userEmails.map(e => e.toLowerCase()));
+  
   const userStatusMap = {};
-  
-  const totalAdherenceMetrics = {
-    totalTardy: 0, totalEarlyLeave: 0, totalOvertime: 0,
-    totalBreakExceed: 0, totalLunchExceed: 0
-  };
-  
   const userMetricsMap = {}; 
+  
+  // WFM Aggregate Counters
+  let countScheduled = 0;
+  let countWorking = 0; // Logged In
+  let countUnavailable = 0; // Absent, Leave, or Scheduled but not logged in yet
+  
   userEmails.forEach(email => {
     const lEmail = email.toLowerCase();
     const name = userData.emailToName[lEmail] || lEmail;
-    // *** MODIFIED for Request 3: Default is now "Day Off" ***
     userStatusMap[lEmail] = "Day Off"; 
     userMetricsMap[name] = {
       name: name, tardy: 0, earlyLeave: 0, overtime: 0,
-      breakExceed: 0, lunchExceed: 0
+      breakExceed: 0, lunchExceed: 0, scheduled: false
     };
   });
 
-  const usersScheduledToday = new Set(); 
+  const scheduledEmails = new Set();
 
-  // 1. Get Today's Schedule
+  // 1. Get Schedule Data & Calculate Capacity Base
   const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
   const scheduleData = scheduleSheet.getDataRange().getValues();
-  
   for (let i = 1; i < scheduleData.length; i++) {
     const row = scheduleData[i];
-    // *** MODIFIED: Read Email from Col G (index 6) ***
     const schEmail = (row[6] || "").toLowerCase();
-    
     if (!targetUserSet.has(schEmail)) continue;
     
-    // *** MODIFIED: Read Date from Col B (index 1) ***
-    const schDate = new Date(row[1]); 
+    const schDate = new Date(row[1]);
     const schDateStr = Utilities.formatDate(schDate, timeZone, "MM/dd/yyyy");
     
     if (schDateStr === targetDateStr) {
-      // *** MODIFIED: Read LeaveType from Col F (index 5) ***
       const leaveType = (row[5] || "").toString().trim().toLowerCase();
-      // *** MODIFIED: Read StartTime from Col C (index 2) ***
-      const startTime = row[2]; 
-
-      // *** MODIFIED for Request 3: Handle "Day Off" (empty type, empty time) ***
+      const startTime = row[2];
+      
       if (leaveType === "" && !startTime) {
         userStatusMap[schEmail] = "Day Off";
       } else if (leaveType === "present" || (leaveType === "" && startTime)) {
-        usersScheduledToday.add(schEmail);
+        scheduledEmails.add(schEmail);
         userStatusMap[schEmail] = "Pending Login";
+        
+        // Mark metric object as scheduled
+        const name = userData.emailToName[schEmail];
+        if (userMetricsMap[name]) userMetricsMap[name].scheduled = true;
+        
+        countScheduled++;
+        countUnavailable++; // Assume unavailable until we find a punch
       } else if (leaveType === "absent") {
         userStatusMap[schEmail] = "Absent";
+        countScheduled++; // Absent counts as scheduled but lost
+        countUnavailable++;
       } else {
         userStatusMap[schEmail] = "On Leave";
+        // Leave usually implies scheduled hours that are now non-productive
+        countScheduled++;
+        countUnavailable++;
       }
     }
   }
   
-  // 2. Get Today's Adherence
+  // 2. Get Adherence & Status
   const adherenceSheet = getOrCreateSheet(ss, SHEET_NAMES.adherence);
   const adherenceData = adherenceSheet.getDataRange().getValues();
   
+  // Pre-fetch other codes for status refinement
   const otherCodesSheet = getOrCreateSheet(ss, SHEET_NAMES.otherCodes);
   const otherCodesData = otherCodesSheet.getDataRange().getValues();
-  const userLastOtherCode = {}; 
+  const userLastOtherCode = {};
   
   for (let i = otherCodesData.length - 1; i > 0; i--) { 
     const row = otherCodesData[i];
     const rowDate = new Date(row[0]);
     const rowShiftDate = getShiftDate(rowDate, SHIFT_CUTOFF_HOUR);
-    const rowDateStr = Utilities.formatDate(rowShiftDate, timeZone, "MM/dd/yyyy");
-    
-    if (rowDateStr === targetDateStr) {
-      const userName = row[1];
-      const userEmail = userData.nameToEmail[userName];
-      
-      if (userEmail && targetUserSet.has(userEmail.toLowerCase())) {
-        if (!userLastOtherCode[userEmail.toLowerCase()]) { 
+    if (Utilities.formatDate(rowShiftDate, timeZone, "MM/dd/yyyy") === targetDateStr) {
+      const uName = row[1];
+      const uEmail = userData.nameToEmail[uName];
+      if (uEmail && targetUserSet.has(uEmail.toLowerCase())) {
+        if (!userLastOtherCode[uEmail.toLowerCase()]) { 
           const [code, type] = (row[2] || "").split(" ");
-          userLastOtherCode[userEmail.toLowerCase()] = { code: code, type: type };
+          userLastOtherCode[uEmail.toLowerCase()] = { code: code, type: type };
         }
       }
     }
   }
   
+  let totalDeviationSeconds = 0;
+
   for (let i = 1; i < adherenceData.length; i++) {
     const row = adherenceData[i];
     const rowDate = new Date(row[0]);
-    const rowDateStr = Utilities.formatDate(rowDate, timeZone, "MM/dd/yyyy");
-    
-    if (rowDateStr === targetDateStr) { 
+    if (Utilities.formatDate(rowDate, timeZone, "MM/dd/yyyy") === targetDateStr) { 
       const userName = row[1];
       const userEmail = userData.nameToEmail[userName];
       
       if (userEmail && targetUserSet.has(userEmail.toLowerCase())) {
         const lEmail = userEmail.toLowerCase();
         
-        if (usersScheduledToday.has(lEmail)) {
+        // Status Logic
+        if (scheduledEmails.has(lEmail)) {
           const login = row[2], b1_in = row[3], b1_out = row[4], l_in = row[5],
                 l_out = row[6], b2_in = row[7], b2_out = row[8], logout = row[9];
           
           let agentStatus = "Pending Login";
+          
           if (login && !logout) {
             agentStatus = "Logged In";
+            
+            // Check sub-status
             const lastOther = userLastOtherCode[lEmail];
+            let onBreak = false;
             
             if (lastOther && lastOther.type === 'In') {
-              agentStatus = "On Break/Other";
+              agentStatus = `On ${lastOther.code}`;
+              onBreak = true;
             } else {
-              if (b1_in && !b1_out) agentStatus = "On Break/Other";
-              if (l_in && !l_out) agentStatus = "On Break/Other";
-              if (b2_in && !b2_out) agentStatus = "On Break/Other";
+              if (b1_in && !b1_out) { agentStatus = "On First Break"; onBreak = true; }
+              if (l_in && !l_out) { agentStatus = "On Lunch"; onBreak = true; }
+              if (b2_in && !b2_out) { agentStatus = "On Last Break"; onBreak = true; }
+            }
+            
+            if (!onBreak) {
+               // They are truly working
+               countWorking++;
+               countUnavailable--; // They were counted as unavailable initially
             }
           } else if (login && logout) {
             agentStatus = "Logged Out";
           }
-          
           userStatusMap[lEmail] = agentStatus;
-          usersScheduledToday.delete(lEmail);
+          scheduledEmails.delete(lEmail); // Remove from set so we don't process again
         }
         
-        // 3. Sum Adherence Metrics
+        // Metrics Summation
         const tardy = parseFloat(row[10]) || 0;
-        const earlyLeave = parseFloat(row[12]) || 0;
         const overtime = parseFloat(row[11]) || 0;
+        const earlyLeave = parseFloat(row[12]) || 0;
         const breakExceed = (parseFloat(row[16]) || 0) + (parseFloat(row[18]) || 0);
         const lunchExceed = parseFloat(row[17]) || 0;
 
-        totalAdherenceMetrics.totalTardy += tardy;
-        totalAdherenceMetrics.totalEarlyLeave += earlyLeave;
-        totalAdherenceMetrics.totalOvertime += overtime;
-        totalAdherenceMetrics.totalBreakExceed += breakExceed;
-        totalAdherenceMetrics.totalLunchExceed += lunchExceed;
-        
+        // Sum deviation for Schedule Adherence
+        // Deviation = Time lost from schedule (Late, Early, Extra Break)
+        totalDeviationSeconds += (tardy + earlyLeave + breakExceed + lunchExceed);
+
         if (userMetricsMap[userName]) {
           userMetricsMap[userName].tardy += tardy;
           userMetricsMap[userName].earlyLeave += earlyLeave;
@@ -3022,40 +3062,59 @@ function getDashboardData(adminEmail, userEmails, date) {
     }
   }
   
-  // 4. Get Pending Leave Requests
+  // 3. Get Pending Requests (Same as before)
   const reqSheet = getOrCreateSheet(ss, SHEET_NAMES.leaveRequests);
   const reqData = reqSheet.getDataRange().getValues();
   const pendingRequests = [];
-  
   for (let i = 1; i < reqData.length; i++) {
     const row = reqData[i];
     const reqEmail = (row[2] || "").toLowerCase();
-    if (row[1] && row[1].toString().trim().toLowerCase() === 'pending' && targetUserSet.has(reqEmail)) {
-      try {
-        pendingRequests.push({
-          name: row[3], type: row[4], 
-          startDate: convertDateToString(new Date(row[5])), days: row[7] 
-        });
-      } catch (e) {
-        Logger.log(`Failed to parse pending request row ${i+1}. Error: ${e.message}`);
-      }
+    if (row[1] && row[1].toString().toLowerCase().includes('pending') && targetUserSet.has(reqEmail)) {
+      pendingRequests.push({ name: row[3], type: row[4], startDate: convertDateToString(new Date(row[5])), days: row[7] });
     }
   }
   
+  // 4. Calculate Final WFM Metrics
+  // Assumption: Avg shift is 9 hours (32400 sec) for calculation
+  const ESTIMATED_SHIFT_SECONDS = 32400; 
+  const totalScheduledSeconds = countScheduled * ESTIMATED_SHIFT_SECONDS;
+  
+  let adherencePct = 100;
+  if (totalScheduledSeconds > 0) {
+    adherencePct = Math.max(0, 100 - ((totalDeviationSeconds / totalScheduledSeconds) * 100));
+  }
+  
+  let capacityPct = 0;
+  if (countScheduled > 0) {
+    capacityPct = (countWorking / countScheduled) * 100;
+  }
+  
+  let shrinkagePct = 0;
+  if (countScheduled > 0) {
+    // Shrinkage = Agents unavailable / Total Scheduled
+    shrinkagePct = (countUnavailable / countScheduled) * 100;
+  }
+
   const agentStatusList = [];
   for (const email of targetUserSet) {
       const name = userData.emailToName[email] || email;
-      // *** MODIFIED for Request 3: Fallback is now "Day Off" ***
       const status = userStatusMap[email] || "Day Off";
       agentStatusList.push({ name: name, status: status });
   }
   agentStatusList.sort((a, b) => a.name.localeCompare(b.name));
   
   const individualAdherenceMetrics = Object.values(userMetricsMap);
-  
+
   return {
+    wfmMetrics: {
+      adherence: adherencePct.toFixed(1),
+      capacity: capacityPct.toFixed(1),
+      shrinkage: shrinkagePct.toFixed(1),
+      working: countWorking,
+      scheduled: countScheduled,
+      unavailable: countUnavailable
+    },
     agentStatusList: agentStatusList,
-    totalAdherenceMetrics: totalAdherenceMetrics,
     individualAdherenceMetrics: individualAdherenceMetrics,
     pendingRequests: pendingRequests
   };
@@ -5588,6 +5647,51 @@ function calculateNetHours(punches) {
 
   const netSeconds = totalDurationSec - deduct1 - deductLunch - deduct2;
   return (netSeconds / 3600).toFixed(2); // Return decimal hours
+}
+
+// ================= PHASE 6: CONFIGURATION API =================
+
+/**
+ * Fetches the current break configuration for the Admin Editor.
+ */
+function webGetBreakConfig() {
+  const { userEmail, userData, ss } = getAuthorizedContext('MANAGE_BALANCES'); // Reusing Admin permission
+  const sheet = getOrCreateSheet(ss, SHEET_NAMES.breakConfig);
+  const data = sheet.getDataRange().getValues();
+  
+  // Skip header row
+  const configs = [];
+  for (let i = 1; i < data.length; i++) {
+    configs.push({
+      type: data[i][0],
+      defaultDur: data[i][1], // Seconds
+      maxDur: data[i][2]      // Seconds
+    });
+  }
+  return configs;
+}
+
+/**
+ * Saves changes to the Break Configuration sheet.
+ */
+function webSaveBreakConfig(newConfigs) {
+  const { userEmail, userData, ss } = getAuthorizedContext('MANAGE_BALANCES');
+  const sheet = getOrCreateSheet(ss, SHEET_NAMES.breakConfig);
+  const data = sheet.getDataRange().getValues();
+  
+  // newConfigs is an array of { type, defaultDur, maxDur }
+  newConfigs.forEach(conf => {
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === conf.type) {
+        // Update Default (Col B) and Max (Col C)
+        sheet.getRange(i + 1, 2).setValue(Number(conf.defaultDur));
+        sheet.getRange(i + 1, 3).setValue(Number(conf.maxDur));
+        break;
+      }
+    }
+  });
+  
+  return "Break configuration updated successfully.";
 }
 
 
