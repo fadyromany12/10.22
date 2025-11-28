@@ -3173,49 +3173,61 @@ function updateReportingLine(adminEmail, userEmail, newSupervisorEmail) {
 
 /**
  * NEW: User submits full registration details + 2 managers.
+ * (FIXED: Header-aware mapping to prevent column misalignment)
  */
 function webSubmitFullRegistration(form) {
   try {
     const userEmail = Session.getActiveUser().getEmail().toLowerCase();
     const ss = getSpreadsheet();
-    const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.employeesCore); 
-    const userData = getUserDataFromDb(ss); // Reuse helper
+    const userData = getUserDataFromDb(ss);
     const regSheet = getOrCreateSheet(ss, SHEET_NAMES.pendingRegistrations);
-
+    
     let userName = userEmail;
     const userObj = userData.userList.find(u => u.email === userEmail);
     if (userObj) userName = userObj.name;
 
     if (!form.directManager || !form.functionalManager) throw new Error("Both managers are required.");
     if (!form.address || !form.phone) throw new Error("Address and Phone are required.");
-    
+
     // Check for existing
     const data = regSheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
       if (data[i][1] === userEmail && data[i][5] !== 'Rejected' && data[i][5] !== 'Approved') { 
-         // Simplistic check, usually status implies active workflow
          throw new Error("You already have a pending registration request.");
       }
     }
 
     const requestID = `REG-${new Date().getTime()}`;
-    
-    regSheet.appendRow([
-      requestID,
-      userEmail,
-      userName,
-      form.directManager,     
-      form.functionalManager, 
-      "Pending",              // DirectStatus
-      "Pending",              // FunctionalStatus (Wait for DM)
-      form.address,
-      form.phone,
-      new Date(),
-      "",                     // HiringDate (Empty start)
-      1                       // WorkflowStage: 1 = Direct Manager
-    ]);
+    const timestamp = new Date();
 
+    // --- DYNAMIC HEADER MAPPING FIX ---
+    const headers = regSheet.getRange(1, 1, 1, regSheet.getLastColumn()).getValues()[0];
+    const newRow = new Array(headers.length).fill(""); // Initialize empty row matching header length
+
+    // Helper to map value to header name
+    const setCol = (headerName, val) => {
+        const idx = headers.indexOf(headerName);
+        if (idx > -1) newRow[idx] = val;
+    };
+
+    // Map Data
+    setCol("RequestID", requestID);
+    setCol("UserEmail", userEmail);
+    setCol("UserName", userName);
+    setCol("DirectManagerEmail", form.directManager);
+    setCol("FunctionalManagerEmail", form.functionalManager);
+    setCol("DirectStatus", "Pending");
+    setCol("FunctionalStatus", "Pending");
+    setCol("Address", form.address);
+    setCol("Phone", form.phone);
+    setCol("RequestTimestamp", timestamp);
+    setCol("WorkflowStage", 1); // Explicitly set Stage 1
+    
+    // --- END FIX ---
+
+    regSheet.appendRow(newRow);
     return "Registration submitted! Waiting for Direct Manager approval.";
+
   } catch (err) {
     Logger.log("webSubmitFullRegistration Error: " + err.message);
     return "Error: " + err.message;
@@ -3244,6 +3256,7 @@ function webGetMyRegistrationStatus() {
 
 /**
  * NEW: Admins see requests where THEY are the approver.
+ * (FIXED: Auto-corrects missing Stage 1 data)
  */
 function webGetPendingRegistrations() {
   try {
@@ -3251,12 +3264,13 @@ function webGetPendingRegistrations() {
     const ss = getSpreadsheet();
     const userData = getUserDataFromDb(ss);
     const adminRole = userData.emailToRole[adminEmail] || 'agent';
+    
     if (adminRole === 'agent') throw new Error("Permission denied.");
 
     const regSheet = getOrCreateSheet(ss, SHEET_NAMES.pendingRegistrations);
     const data = regSheet.getDataRange().getValues();
     const pending = [];
-    const headers = data[0]; // Get headers to map indexes safely
+    const headers = data[0];
     
     // Map Indexes
     const idx = {
@@ -3276,8 +3290,18 @@ function webGetPendingRegistrations() {
       const row = data[i];
       const directMgr = (row[idx.dm] || "").toLowerCase();
       const funcMgr = (row[idx.fm] || "").toLowerCase();
-      const stage = Number(row[idx.stage] || 0); // Default to 0 if missing
-      const hiringDate = row[idx.hDate] ? convertDateToString(new Date(row[idx.hDate])).split('T')[0] : ""; // YYYY-MM-DD
+      const directStatus = row[idx.dmStat];
+      const funcStatus = row[idx.fmStat];
+      let stage = Number(row[idx.stage] || 0);
+      
+      // --- FIX: INFER STAGE IF MISSING ---
+      if (stage === 0) {
+          if (directStatus === 'Pending') stage = 1;
+          else if (directStatus === 'Approved' && funcStatus === 'Pending') stage = 2;
+      }
+      // -----------------------------------
+
+      const hiringDate = row[idx.hDate] ? convertDateToString(new Date(row[idx.hDate])).split('T')[0] : "";
 
       let actionRequired = false;
       let myRoleInRequest = "";
@@ -3310,7 +3334,7 @@ function webGetPendingRegistrations() {
           approverRole: myRoleInRequest, 
           otherStatus: myRoleInRequest === "Direct" ? "Step 1 of 2" : "Step 2: Final Approval",
           timestamp: convertDateToString(new Date(row[idx.ts])),
-          hiringDate: hiringDate, // Pass existing date if any
+          hiringDate: hiringDate,
           stage: stage
         });
       }
