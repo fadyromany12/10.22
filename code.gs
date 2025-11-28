@@ -48,16 +48,15 @@ function doGet(e) {
 }
 // ================= WEB APP APIs (UPDATED) =================
 
-// - REPLACEMENT (PHASE 3 UPDATED)
 function webPunch(action, targetUserName, adminTimestamp, projectId) { 
   try {
     // 1. SMART CONTEXT (Load Data)
     const { userEmail, userName: selfName, userData, ss } = getAuthorizedContext(null);
-    
+
     // 2. Validate Target
     const targetEmail = userData.nameToEmail[targetUserName];
     if (!targetEmail) throw new Error(`User "${targetUserName}" not found.`);
-    
+
     // 3. PERMISSION CHECK
     if (targetEmail.toLowerCase() !== userEmail.toLowerCase()) {
         getAuthorizedContext('PUNCH_OTHERS'); // Throws error if missing permission
@@ -66,19 +65,27 @@ function webPunch(action, targetUserName, adminTimestamp, projectId) {
     // 4. Run Logic
     const puncherEmail = userEmail;
     const resultMessage = punch(action, targetUserName, puncherEmail, adminTimestamp);
+    
     if (projectId || action === "Logout") {
       logProjectHours(targetUserName, action, projectId, adminTimestamp);
     }
+
+    // *** CRITICAL FIX: FORCE DATA SAVE BEFORE READING STATUS ***
+    SpreadsheetApp.flush(); 
+    // ***********************************************************
 
     // 5. Get New Status
     const timeZone = Session.getScriptTimeZone();
     const now = adminTimestamp ? new Date(adminTimestamp) : new Date();
     const shiftDate = getShiftDate(now, SHIFT_CUTOFF_HOUR);
     const formattedDate = Utilities.formatDate(shiftDate, timeZone, "MM/dd/yyyy");
+    
     const newStatus = getLatestPunchStatus(targetEmail, targetUserName, shiftDate, formattedDate);
     
     return { message: resultMessage, newStatus: newStatus };
-  } catch (err) { return { message: "Error: " + err.message, newStatus: null }; }
+
+  } catch (err) { return { message: "Error: " + err.message, newStatus: null };
+  }
 }
 
 // === NEW HELPER FOR PHASE 3 ===
@@ -1276,11 +1283,9 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
       const resultMsg = logOtherCode(otherCodesSheet, userName, action, nowTimestamp, isAdmin && (puncherEmail !== userEmail || adminTimestamp) ? puncherEmail : null);
       logsSheet.appendRow([new Date(), userName, userEmail, action, nowTimestamp]); 
       
-      // --- NEW: Update Adherence Tracker "LastAction" Columns ---
       const row = findOrCreateRow(adherenceSheet, userName, shiftDate, formattedDate);
-      adherenceSheet.getRange(row, 25).setValue(action);        // Col Y: LastAction
-      adherenceSheet.getRange(row, 26).setValue(nowTimestamp);  // Col Z: LastActionTimestamp
-      // ---------------------------------------------------------
+      adherenceSheet.getRange(row, 25).setValue(action);        
+      adherenceSheet.getRange(row, 26).setValue(nowTimestamp);  
 
       return resultMsg;
     }
@@ -1291,18 +1296,23 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   const columns = { "Login": 3, "First Break In": 4, "First Break Out": 5, "Lunch In": 6, "Lunch Out": 7, "Last Break In": 8, "Last Break Out": 9, "Logout": 10 };
   const col = columns[action];
   if (!col) throw new Error("Invalid action: " + action);
+  
   const isActionIn = (action === "Login" || action === "First Break In" || action === "Lunch In" || action === "Last Break In");
   const existingValue = adherenceSheet.getRange(row, col).getValue();
   
   // Strict double-punch check for "In" actions
   if (isActionIn && existingValue) throw new Error(`Error: "${action}" has already been punched today.`);
+  
   const currentPunches = adherenceSheet.getRange(row, 3, 1, 8).getValues()[0];
   const punches = { login: currentPunches[0], firstBreakIn: currentPunches[1], firstBreakOut: currentPunches[2], lunchIn: currentPunches[3], lunchOut: currentPunches[4], lastBreakIn: currentPunches[5], lastBreakOut: currentPunches[6], logout: currentPunches[7] };
+  
   if (!isAdmin) {
     if (action !== "Login" && !punches.login) throw new Error("You must 'Login' first.");
-    const sequentialErrors = { "First Break Out": { required: punches.firstBreakIn, msg: "You must punch 'First Break In' first."
-    }, "Lunch Out": { required: punches.lunchIn, msg: "You must punch 'Lunch In' first."
-    }, "Last Break Out": { required: punches.lastBreakIn, msg: "You must punch 'Last Break In' first." } };
+    const sequentialErrors = { 
+        "First Break Out": { required: punches.firstBreakIn, msg: "You must punch 'First Break In' first." },
+        "Lunch Out": { required: punches.lunchIn, msg: "You must punch 'Lunch In' first." },
+        "Last Break Out": { required: punches.lastBreakIn, msg: "You must punch 'Last Break In' first." } 
+    };
     if (sequentialErrors[action] && !sequentialErrors[action].required) throw new Error(sequentialErrors[action].msg);
     if (!isActionIn && existingValue) throw new Error(`"${action}" already punched today.`);
   }
@@ -1313,14 +1323,10 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   }
 
   adherenceSheet.getRange(row, col).setValue(nowTimestamp);
-  
-  // --- NEW: Update "LastAction" Columns ---
-  adherenceSheet.getRange(row, 25).setValue(action);        // Col Y
-  adherenceSheet.getRange(row, 26).setValue(nowTimestamp);  // Col Z
-  // ----------------------------------------
-
+  adherenceSheet.getRange(row, 25).setValue(action);        
+  adherenceSheet.getRange(row, 26).setValue(nowTimestamp);  
   logsSheet.appendRow([new Date(), userName, userEmail, action, nowTimestamp]);
-  // Update local punches for immediate calculation
+
   switch(action) {
     case "Login": punches.login = nowTimestamp; break;
     case "First Break In": punches.firstBreakIn = nowTimestamp; break;
@@ -1338,60 +1344,67 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     if (punches.firstBreakIn && punches.firstBreakOut) {
       duration = timeDiffInSeconds(punches.firstBreakIn, punches.firstBreakOut);
       diff = duration - getBreakConfig("First Break").default;
-      adherenceSheet.getRange(row, 17).setValue((diff > 0) ? diff : "No"); // Col Q
+      adherenceSheet.getRange(row, 17).setValue((diff > 0) ? diff : "No");
     }
     if (punches.lunchIn && punches.lunchOut) {
       duration = timeDiffInSeconds(punches.lunchIn, punches.lunchOut);
       diff = duration - getBreakConfig("Lunch").default;
-      adherenceSheet.getRange(row, 18).setValue((diff > 0) ? diff : "No"); // Col R
+      adherenceSheet.getRange(row, 18).setValue((diff > 0) ? diff : "No");
     }
     if (punches.lastBreakIn && punches.lastBreakOut) {
       duration = timeDiffInSeconds(punches.lastBreakIn, punches.lastBreakOut);
       diff = duration - getBreakConfig("Last Break").default;
-      adherenceSheet.getRange(row, 19).setValue((diff > 0) ? diff : "No"); // Col S
+      adherenceSheet.getRange(row, 19).setValue((diff > 0) ? diff : "No");
     }
-  } catch (e) { logsSheet.appendRow([new Date(), userName, userEmail, "Break Exceed Calc Error", e.message]);
-  }
+  } catch (e) { logsSheet.appendRow([new Date(), userName, userEmail, "Break Exceed Calc Error", e.message]); }
 
-  // === SCHEDULE MATCHING & LEAVE TYPE ===
+  // === SCHEDULE MATCHING FIX ===
   const scheduleData = scheduleSheet.getDataRange().getValues();
   let shiftStartDateObj = null, shiftEndDateObj = null;
   let schedBreak1 = null, schedLunch = null, schedBreak2 = null;
-  let scheduledLeaveType = "Present"; // Default to Present if punching
-
+  
   for (let i = 1; i < scheduleData.length; i++) {
     const rowDat = scheduleData[i];
-    // Trim and lower case comparison for safety
     const schEmail = String(rowDat[6]).trim().toLowerCase();
-    // Check Email and Date match
-    if (schEmail === userEmail && parseDate(rowDat[1])?.getTime() === shiftDate.getTime()) {
+    
+    // *** FIX: Compare Date Strings to ignore time differences in comparison ***
+    const rowDateObj = parseDate(rowDat[1]);
+    const rowDateStr = rowDateObj ? Utilities.formatDate(rowDateObj, timeZone, "yyyy-MM-dd") : "";
+    const shiftDateStr = Utilities.formatDate(shiftDate, timeZone, "yyyy-MM-dd");
+
+    if (schEmail === userEmail && rowDateStr === shiftDateStr) {
        
-       // Found Schedule!
-       scheduledLeaveType = rowDat[5] || "Present";
+       // Handle Time parsing (Time might be Date obj or String)
+       const formatTimeSafe = (val) => {
+          if (val instanceof Date) return Utilities.formatDate(val, timeZone, "HH:mm:ss");
+          return val; // Assume string
+       };
+
+       if (rowDat[2]) shiftStartDateObj = createDateTime(new Date(rowDat[1]), formatTimeSafe(rowDat[2]));
        
-       if (rowDat[2]) shiftStartDateObj = createDateTime(new Date(rowDat[1]), Utilities.formatDate(rowDat[2], timeZone, "HH:mm:ss"));
        if (rowDat[4]) {
          const baseEndDate = rowDat[3] ? new Date(rowDat[3]) : new Date(rowDat[1]);
-         shiftEndDateObj = createDateTime(baseEndDate, Utilities.formatDate(rowDat[4], timeZone, "HH:mm:ss"));
-         // Handle overnight logic
+         shiftEndDateObj = createDateTime(baseEndDate, formatTimeSafe(rowDat[4]));
+         // Overnight logic
          if(shiftStartDateObj && shiftEndDateObj && shiftEndDateObj < shiftStartDateObj) {
             shiftEndDateObj.setDate(shiftEndDateObj.getDate() + 1);
          }
        }
        
-       // Windows
-       const parseWindow = (t) => t ? createDateTime(new Date(rowDat[1]), Utilities.formatDate(t, timeZone, "HH:mm:ss")) : null;
+       const parseWindow = (t) => t ? createDateTime(new Date(rowDat[1]), formatTimeSafe(t)) : null;
        if (rowDat[7] && rowDat[8]) schedBreak1 = { start: parseWindow(rowDat[7]), end: parseWindow(rowDat[8]) };
        if (rowDat[9] && rowDat[10]) schedLunch = { start: parseWindow(rowDat[9]), end: parseWindow(rowDat[10]) };
        if (rowDat[11] && rowDat[12]) schedBreak2 = { start: parseWindow(rowDat[11]), end: parseWindow(rowDat[12]) };
        
-       break; // Stop after finding the first matching schedule row
+       break; 
     }
   }
 
-  // Ensure "Leave Type" (Column 14 / N) is populated
-  adherenceSheet.getRange(row, 14).setValue(scheduledLeaveType);
-  
+  // === 2. LEAVE TYPE (FORCE "PRESENT" ON LOGIN) ===
+  if (action === "Login") {
+      adherenceSheet.getRange(row, 14).setValue("Present");
+  }
+
   // Break Window Validation
   let violation = "No";
   const checkWindow = (t, w) => w ? (t < w.start || t > w.end) : false;
@@ -1400,58 +1413,54 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   else if (action === "Last Break In" && schedBreak2 && checkWindow(nowTimestamp, schedBreak2)) violation = "Yes";
   if (violation === "Yes") adherenceSheet.getRange(row, 22).setValue("Yes");
 
-  // === SHIFT METRICS (TARDY / EARLY / OT) ===
-  // Only calculate if we successfully found a schedule and parsed start time
-  if (shiftStartDateObj) {
-    
-    // 1. LOGIN Actions (Tardy & Pre-Shift Overtime)
-    // Run this logic on Login, or if Tardy column is currently empty (retry)
-    const currentTardy = adherenceSheet.getRange(row, 11).getValue();
-    if (action === "Login" || (punches.login && (currentTardy === "" || currentTardy === 0))) {
-       const loginTime = action === "Login" ? nowTimestamp : punches.login;
-       const diff = timeDiffInSeconds(shiftStartDateObj, loginTime); // Positive = Tardy, Negative = Early
-       
-       if (diff > 0) {
-         adherenceSheet.getRange(row, 11).setValue(diff); // Col K (11): Tardy
-         adherenceSheet.getRange(row, 24).setValue(0); // Clear Pre-Shift OT
-       } else {
-         adherenceSheet.getRange(row, 11).setValue(0);
-         // Pre-Shift Overtime Calculation
-         const earlySec = Math.abs(diff);
-         const threshold = getBreakConfig("Overtime Pre-Shift").default;
-         if (earlySec > threshold) {
-           adherenceSheet.getRange(row, 24).setValue(earlySec); // Col X (24): Pre-Shift OT
-         } else {
-           adherenceSheet.getRange(row, 24).setValue(0);
-         }
-       }
-    }
-    
-    // 2. LOGOUT Actions (Early Leave & Post-Shift Overtime)
-    if ((action === "Logout" || punches.logout) && shiftEndDateObj) {
-       const logoutTime = action === "Logout" ? nowTimestamp : punches.logout;
-       const diff = timeDiffInSeconds(shiftEndDateObj, logoutTime); // Positive = Overtime, Negative = Early Leave
-       
-       if (diff > 0) {
-         // Post-Shift Overtime
-         const threshold = getBreakConfig("Overtime Post-Shift").default;
-         if (diff > threshold) {
-           adherenceSheet.getRange(row, 12).setValue(diff); // Col L (12): Overtime
-         } else {
-           adherenceSheet.getRange(row, 12).setValue(0);
-         }
-         adherenceSheet.getRange(row, 13).setValue(0); // Early Leave is 0
-       } else {
-         adherenceSheet.getRange(row, 12).setValue(0); // Overtime is 0
-         adherenceSheet.getRange(row, 13).setValue(Math.abs(diff)); // Col M (13): Early Leave
-       }
-    }
+  // === 1. TARDY & PRE-SHIFT OVERTIME (ON LOGIN) ===
+  if (action === "Login") {
+      if (shiftStartDateObj) {
+           const diff = timeDiffInSeconds(shiftStartDateObj, nowTimestamp); 
+           
+           if (diff > 0) {
+             adherenceSheet.getRange(row, 11).setValue(diff); // Tardy
+             adherenceSheet.getRange(row, 24).setValue(0);    // Clear OT
+           } else {
+             adherenceSheet.getRange(row, 11).setValue(0);    // Tardy 0
+             
+             const earlySec = Math.abs(diff);
+             const threshold = getBreakConfig("Overtime Pre-Shift").default;
+             if (earlySec > threshold) {
+               adherenceSheet.getRange(row, 24).setValue(earlySec); // Pre-Shift OT
+             } else {
+               adherenceSheet.getRange(row, 24).setValue(0);
+             }
+           }
+      } else {
+           // Log warning if no schedule found for metrics
+           logsSheet.appendRow([new Date(), userName, userEmail, "Calc Warning", "No Schedule found for Tardy calc"]);
+      }
   }
-
-  // Net Login Hours
-  if (action === "Logout" && punches.login) {
-    const netHours = calculateNetHours(punches);
-    adherenceSheet.getRange(row, 23).setValue(netHours); // Col W (23)
+    
+  // === 3. OVERTIME & EARLY LEAVE (ON LOGOUT) ===
+  if (action === "Logout") {
+      if (shiftEndDateObj) {
+           const diff = timeDiffInSeconds(shiftEndDateObj, nowTimestamp); 
+           
+           if (diff > 0) {
+             const threshold = getBreakConfig("Overtime Post-Shift").default;
+             if (diff > threshold) {
+               adherenceSheet.getRange(row, 12).setValue(diff); // Overtime
+             } else {
+               adherenceSheet.getRange(row, 12).setValue(0);
+             }
+             adherenceSheet.getRange(row, 13).setValue(0); 
+           } else {
+             adherenceSheet.getRange(row, 12).setValue(0); 
+             adherenceSheet.getRange(row, 13).setValue(Math.abs(diff)); // Early Leave
+           }
+      }
+      
+      if (punches.login) {
+          const netHours = calculateNetHours(punches);
+          adherenceSheet.getRange(row, 23).setValue(netHours);
+      }
   }
 
   return `${userName}: ${action} recorded at ${Utilities.formatDate(nowTimestamp, timeZone, "HH:mm:ss")}`;
@@ -1724,7 +1733,20 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
   // Iterate backwards to find the latest row
   for (let i = adherenceData.length - 1; i > 0; i--) {
     const row = adherenceData[i];
-    if (row[1] === userName && Utilities.formatDate(new Date(row[0]), Session.getScriptTimeZone(), "MM/dd/yyyy") === formattedDate) {
+    // Check if name matches AND date matches (using string comparison for safety)
+    const rowDate = row[0];
+    let rowDateStr = "";
+    if (rowDate instanceof Date) {
+        rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "MM/dd/yyyy");
+    } else {
+        // Handle potential string date
+        const parsed = new Date(rowDate);
+        if (!isNaN(parsed.getTime())) {
+            rowDateStr = Utilities.formatDate(parsed, Session.getScriptTimeZone(), "MM/dd/yyyy");
+        }
+    }
+
+    if (row[1] === userName && rowDateStr === formattedDate) {
       foundRowData = row;
       break;
     }
@@ -1732,47 +1754,55 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
 
   const scheduleInfo = getScheduleForDate(userEmail, shiftDate);
 
-  // If no row exists for today, they are Logged Out
   if (!foundRowData) {
     return { status: "Logged Out", time: null, loginTime: null, schedule: scheduleInfo };
   }
 
+  // Helper to safely parse time values from the sheet
+  const safeParseTime = (val) => {
+      if (!val) return null;
+      if (val instanceof Date) return val;
+      // If it's a string (e.g. "10:00:00"), try to parse it
+      const parsed = new Date(val);
+      // If valid date, return it
+      if (!isNaN(parsed.getTime())) return parsed;
+      // If it's time-only string, append to today's date to make it parseable
+      const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+      const parsedTime = new Date(`${todayStr} ${val}`);
+      if (!isNaN(parsedTime.getTime())) return parsedTime;
+      return null;
+  };
+
   // 1. Retrieve Login Time (Column C -> Index 2)
-  // We still need this for the "Shift Timer" on the frontend
-  let loginTime = (foundRowData[2] instanceof Date) ? foundRowData[2] : null;
+  let loginTime = safeParseTime(foundRowData[2]);
 
-  // 2. Retrieve Last Action & Timestamp (Column Y -> Index 24, Column Z -> Index 25)
-  // These columns are now updated by EVERY punch (Adherence & Other Codes)
+  // 2. Retrieve Last Action & Timestamp (Col Y -> Index 24, Column Z -> Index 25)
+  // Ensure the array is long enough (getDataRange might be short if last cols are empty)
   let lastPunchName = (foundRowData.length > 24) ? foundRowData[24] : null;
-  let lastPunchTime = (foundRowData.length > 25) && (foundRowData[25] instanceof Date) ? foundRowData[25] : null;
+  let lastPunchTime = (foundRowData.length > 25) ? safeParseTime(foundRowData[25]) : null;
 
-  // 3. Fallback for Transition/Legacy Data
-  // If the new columns are empty (e.g. data from yesterday), try to infer from Login
-  if (!lastPunchName || !lastPunchTime) {
-      if (loginTime && !foundRowData[9]) { // Has Login but no Logout (Index 9)
-          lastPunchName = "Login";
-          lastPunchTime = loginTime;
-      } else {
-          // If no LastAction and no Login (or already Logged Out), assume default
-          return { status: "Logged Out", time: null, loginTime: null, schedule: scheduleInfo };
-      }
+  // 3. Fallback for "Login"
+  // If LastAction columns are empty but we have a Login Time, default to "Logged In"
+  if ((!lastPunchName || !lastPunchTime) && loginTime && !foundRowData[9]) {
+      lastPunchName = "Login";
+      lastPunchTime = loginTime;
   }
 
   // 4. Determine Current Status String
   let currentStatus = "Logged Out";
   
-  if (lastPunchName.endsWith(" In")) {
+  if (lastPunchName && lastPunchName.endsWith(" In")) {
     if (lastPunchName === "Login") {
        currentStatus = "Logged In";
     } else {
-       // "Coaching In" -> "On Coaching", "First Break In" -> "On First Break"
+       // "Coaching In" -> "On Coaching"
        currentStatus = "On " + lastPunchName.replace(" In", "");
     }
-  } else if (lastPunchName.endsWith(" Out")) {
+  } else if (lastPunchName && lastPunchName.endsWith(" Out")) {
     if (lastPunchName === "Logout") {
        currentStatus = "Logged Out";
     } else {
-       // Returning from Break/Meeting/Coaching -> Back to Working
+       // Returning from Break/Aux -> Back to Working
        currentStatus = "Logged In";
     }
   }
