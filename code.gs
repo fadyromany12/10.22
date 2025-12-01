@@ -27,9 +27,10 @@ const SHEET_NAMES = {
   historyLogs: "Employee_History",
   warnings: "Warnings",
   financialEntitlements: "Financial_Entitlements",
-  rbac: "RBAC_Config",// NEW
+  rbac: "RBAC_Config",
   overtime: "Overtime_Requests",
-  breakConfig: "Break_Config"
+  breakConfig: "Break_Config",
+  offboarding: "Offboarding_Requests" // <--- NEW
 };
 // --- Break Time Configuration (in seconds) ---
 const PLANNED_BREAK_SECONDS = 15 * 60; // 15 minutes
@@ -1336,8 +1337,8 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   // 3. Get Current State (Critical for Logic)
   const row = findOrCreateRow(adherenceSheet, userName, shiftDate, formattedDate);
   // Fetch current state from Column Y (25) - LastAction
-  const lastAction = adherenceSheet.getRange(row, 25).getValue() || "Logged Out"; 
-  
+  const lastAction = adherenceSheet.getRange(row, 25).getValue() || "Logged Out";
+
   // 4. LOGIC ENGINE
   
   // --- A. LOGIN LOGIC ---
@@ -1345,15 +1346,38 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     // Check 1: Already Logged In?
     const existingLogin = adherenceSheet.getRange(row, 3).getValue();
     if (existingLogin) throw new Error("You have already logged in today. Duplicate login is not allowed.");
-
+    
     // Check 2: 4-Hour Schedule Lock (Admins bypass this)
     if (!puncherIsAdmin) {
        validateScheduleLock(userEmail, nowTimestamp);
     }
 
+    // --- TARDY CALCULATION FIX ---
+    const sched = getScheduleForDate(userEmail, shiftDate);
+    if (sched && sched.start) {
+      const schedStart = new Date(sched.start);
+      // Calculate difference in seconds
+      const diffSec = (nowTimestamp.getTime() - schedStart.getTime()) / 1000;
+      
+      // Write Tardy if positive (Late), else 0
+      // Tardy is Column K (Index 11)
+      adherenceSheet.getRange(row, 11).setValue(diffSec > 0 ? diffSec : 0);
+      
+      // Also write Pre-Shift Overtime if negative (Early)
+      // Pre-Shift OT is Column X (Index 24)
+      if (diffSec < 0) {
+         const earlySec = Math.abs(diffSec);
+         const threshold = getBreakConfig("Overtime Pre-Shift").default || 300;
+         if (earlySec > threshold) {
+             adherenceSheet.getRange(row, 24).setValue(earlySec);
+         }
+      }
+    }
+    // -----------------------------
+
     // Execution
     adherenceSheet.getRange(row, 3).setValue(nowTimestamp); // Login Time
-    adherenceSheet.getRange(row, 14).setValue("Present");   // Leave Type
+    adherenceSheet.getRange(row, 14).setValue("Present"); // Leave Type
     updateState(adherenceSheet, row, "Login", nowTimestamp);
     logsSheet.appendRow([new Date(), userName, userEmail, action, nowTimestamp]);
     return `Welcome ${userName}. You are successfully Logged In.`;
@@ -1362,7 +1386,7 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   // --- B. PRE-REQUISITE CHECK (Must be logged in to do anything else) ---
   const loginTime = adherenceSheet.getRange(row, 3).getValue();
   if (!loginTime) throw new Error("You must punch 'Login' before performing any other action.");
-  
+
   // --- C. LOGOUT LOGIC ---
   if (action === "Logout") {
     // Check: Must be in "Login" state (Working) to logout. Cannot logout from Break/AUX.
@@ -1400,7 +1424,7 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     "Lunch In": 6, "Lunch Out": 7, 
     "Last Break In": 8, "Last Break Out": 9 
   };
-  
+
   if (breakCols[action]) {
       const colIndex = breakCols[action];
       const isBreakIn = action.endsWith("In");
@@ -1422,7 +1446,6 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
           
           // Check Schedule Window (Compliance)
           checkBreakWindowCompliance(adherenceSheet, row, userEmail, action, nowTimestamp);
-          
           return `${action} recorded. Enjoy your break.`;
 
       } else {
@@ -1456,7 +1479,7 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   throw new Error("Unknown punch action.");
 }
 
-// --- HELPER: Process AUX Codes (Reusable & Multi-use) ---
+
 // --- HELPER: Process AUX Codes (Fixed for Multi-word codes like "System Down") ---
 function processAuxCode(auxSheet, mainSheet, mainRow, userName, userEmail, action, now, lastAction, adminEmail) {
     // FIX: Handle codes with spaces (e.g., "System Down In")
@@ -1528,22 +1551,25 @@ function updateState(sheet, row, action, time) {
 function validateScheduleLock(userEmail, now) {
     const schedule = getScheduleForDate(userEmail, now);
     
-    // If no schedule, we usually allow login (or you can block it)
+    // If no schedule exists, we usually allow login (or you can block it by throwing error here)
     if (!schedule || !schedule.start) return; 
 
     const schedStart = new Date(schedule.start);
-    
-    // Difference in milliseconds
     const diffMs = now - schedStart;
+    const diffMinutes = diffMs / 60000;
     const diffHours = diffMs / (1000 * 60 * 60);
 
-    // If user is trying to login more than 4 hours AFTER start time
+    // 1. Block Early Login (> 15 mins before start)
+    // If Pre-Shift OT is approved, 'schedStart' is already moved earlier, so this adapts automatically.
+    if (diffMinutes < -15) {
+         const timeString = Utilities.formatDate(schedStart, Session.getScriptTimeZone(), "HH:mm");
+         throw new Error(`Login Blocked: Too early. You can only log in 15 minutes before your shift start (${timeString}).`);
+    }
+
+    // 2. Block Late Login (> 4 hours after start)
     if (diffHours > 4) {
         throw new Error(`Login Blocked: You are ${diffHours.toFixed(1)} hours late. The cutoff is 4 hours.`);
     }
-    
-    // Optional: Block if trying to login too early (e.g., > 1 hour before)
-    // if (diffHours < -1) throw new Error("Too early to login.");
 }
 
 // --- HELPER: End Shift Metrics (Overtime/Early Leave) ---
@@ -2120,6 +2146,10 @@ function getOrCreateSheet(ss, name) {
       sheet.getRange("A1:J1").setValues([["RequestID", "UserEmail", "UserName", "CurrentRole", "RequestedRole", "Justification", "RequestTimestamp", "Status", "ActionByEmail", "ActionTimestamp"]]);
       sheet.getRange("G:G").setNumberFormat("mm/dd/yyyy hh:mm:ss");
       sheet.getRange("J:J").setNumberFormat("mm/dd/yyyy hh:mm:ss");
+    }
+    else if (name === SHEET_NAMES.offboarding) {
+      sheet.getRange("A1:O1").setValues([["RequestID", "EmployeeID", "Name", "Email", "Type", "Reason", "Status", "DirectManager", "ProjectManager", "DirectStatus", "ProjectStatus", "HRStatus", "RequestDate", "ExitDate", "InitiatedBy"]]);
+      sheet.setFrozenRows(1);
     }
   }
 
@@ -3994,32 +4024,46 @@ function monthlyLeaveAccrual() {
  */
 function parseDate(dateInput) {
   if (!dateInput) return null;
-  if (dateInput instanceof Date) return dateInput; // Already a date
+  if (dateInput instanceof Date) return dateInput;
 
   try {
-    // Check if it's a serial number (e.g., 45576)
+    // 1. Handle Serial Number (Excel/Sheets style)
     if (typeof dateInput === 'number' && dateInput > 1) {
-      // Google Sheets/Excel serial date (days since Dec 30, 1899)
-      // Use UTC to avoid timezone issues during calculation.
-      const baseDate = new Date(Date.UTC(1899, 11, 30)); // 1899-12-30 UTC
+      const baseDate = new Date(Date.UTC(1899, 11, 30));
       baseDate.setUTCDate(baseDate.getUTCDate() + dateInput);
-      if (!isNaN(baseDate.getTime())) return baseDate;
+      return baseDate;
     }
     
-    // Check for MM/dd/yyyy format (common in US CSVs)
-    if (typeof dateInput === 'string' && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateInput)) {
-      const parts = dateInput.split('/');
-      // new Date(year, monthIndex, day)
-      const newDate = new Date(parts[2], parts[0] - 1, parts[1]);
-      if (!isNaN(newDate.getTime())) return newDate;
+    // 2. Handle String with DD/MM/YYYY (with optional time)
+    if (typeof dateInput === 'string') {
+      // Regex looks for dd/mm/yyyy at the start
+      const match = dateInput.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (match) {
+        const day = parseInt(match[1], 10);
+        const month = parseInt(match[2], 10) - 1; // Months are 0-11
+        const year = parseInt(match[3], 10);
+        
+        // If it has time, try to parse it, otherwise default to 00:00
+        let hours = 0, minutes = 0, seconds = 0;
+        const timeMatch = dateInput.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        if (timeMatch) {
+           hours = parseInt(timeMatch[1], 10);
+           minutes = parseInt(timeMatch[2], 10);
+           seconds = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+        }
+        
+        const newDate = new Date(year, month, day, hours, minutes, seconds);
+        if (!isNaN(newDate.getTime())) return newDate;
+      }
     }
 
-    // Try standard parsing for ISO (yyyy-MM-dd) or other recognizable formats
-    const newDate = new Date(dateInput);
-    if (!isNaN(newDate.getTime())) return newDate;
+    // 3. Fallback to standard parser (ISO format yyyy-mm-dd)
+    const standardDate = new Date(dateInput);
+    if (!isNaN(standardDate.getTime())) return standardDate;
 
-    return null; // Invalid date
+    return null; 
   } catch(e) {
+    Logger.log("Date Parse Error: " + e.message);
     return null;
   }
 }
@@ -5790,14 +5834,19 @@ function webActionOvertime(reqId, action, comment) {
   }
   if (rowIdx === -1) throw new Error("Request not found.");
 
-  const targetEmail = userData.userList.find(u => u.empID === reqRow[1])?.email;
-  const directMgr = reqRow[13];
-  const projectMgr = reqRow[14];
+  const directMgr = (reqRow[13] || "").toLowerCase();
+  const projectMgr = (reqRow[14] || "").toLowerCase();
+  const adminEmailLower = adminEmail.toLowerCase();
   
   // 1. Identify Role of Approver
-  let isDirect = (adminEmail === directMgr);
-  let isProject = (adminEmail === projectMgr);
-  let isSuper = (userData.userRole === 'superadmin');
+  let isDirect = (adminEmailLower === directMgr);
+  let isProject = (adminEmailLower === projectMgr);
+  const isSuper = (userData.userRole === 'superadmin');
+
+  // FIX: If Project Mgr is empty/missing, or same as Direct, treat Direct approval as both
+  if (isDirect && (!projectMgr || projectMgr === directMgr)) {
+      isProject = true;
+  }
 
   if (!isDirect && !isProject && !isSuper) {
       throw new Error("You are not authorized to approve this request.");
@@ -5813,32 +5862,30 @@ function webActionOvertime(reqId, action, comment) {
   }
 
   // 3. Handle APPROVE
-  let newStatus = reqRow[8]; // Current Status
-  
-  if (isDirect || isSuper) {
-      otSheet.getRange(rowIdx, 16).setValue("Approved"); // DirectStatus
-  }
-  if (isProject || isSuper) {
-      otSheet.getRange(rowIdx, 17).setValue("Approved"); // ProjectStatus
-  }
+  // Update the specific column based on who is acting
+  if (isDirect || isSuper) otSheet.getRange(rowIdx, 16).setValue("Approved"); // DirectStatus
+  if (isProject || isSuper) otSheet.getRange(rowIdx, 17).setValue("Approved"); // ProjectStatus
 
-  // Re-read statuses to determine next step
-  const dStat = (isDirect || isSuper) ? "Approved" : reqRow[15];
-  const pStat = (isProject || isSuper) ? "Approved" : reqRow[16];
+  // Re-read statuses to decide if we can Finalize
+  // We use the flags we just calculated + existing sheet data
+  const currentDirectStatus = (isDirect || isSuper) ? "Approved" : reqRow[15];
+  const currentProjectStatus = (isProject || isSuper) ? "Approved" : reqRow[16];
 
-  if (dStat === 'Approved' && pStat === 'Pending') {
-      newStatus = "Pending Project Mgr";
-  } else if (dStat === 'Approved' && pStat === 'Approved') {
-      newStatus = "Approved";
+  let newMainStatus = reqRow[8]; // Default to current
+
+  if (currentDirectStatus === 'Approved' && currentProjectStatus !== 'Approved') {
+      newMainStatus = "Pending Project Mgr";
+  } else if (currentDirectStatus === 'Approved' && currentProjectStatus === 'Approved') {
+      newMainStatus = "Approved";
   }
 
-  // Update Main Status
-  otSheet.getRange(rowIdx, 9).setValue(newStatus);
-  otSheet.getRange(rowIdx, 11).setValue(adminEmail); // Last Action By
+  // Update Main Status & Metadata
+  otSheet.getRange(rowIdx, 9).setValue(newMainStatus);
+  otSheet.getRange(rowIdx, 11).setValue(adminEmail); 
   otSheet.getRange(rowIdx, 12).setValue(new Date());
 
   // 4. Finalize if Fully Approved
-  if (newStatus === "Approved") {
+  if (newMainStatus === "Approved") {
       const requestData = {
           date: reqRow[3],
           type: reqRow[12],
@@ -5848,15 +5895,18 @@ function webActionOvertime(reqId, action, comment) {
       };
       
       const targetUserObj = userData.userList.find(u => u.empID === reqRow[1]);
-      finalizeOvertimeSchedule(ss, targetUserObj, requestData, adminEmail);
-      return "Request Finalized. Schedule Updated.";
+      if (targetUserObj) {
+          finalizeOvertimeSchedule(ss, targetUserObj, requestData, adminEmail);
+          return "Request Finalized. Schedule Updated.";
+      } else {
+          return "Request Approved (Warning: User not found in DB to update schedule).";
+      }
   }
 
   return "Approval Recorded. Waiting for next approver.";
 }
 
-
-// Helper: Updates Schedule
+// Helper: Updates Schedule with Overnight Logic
 function finalizeOvertimeSchedule(ss, targetUser, reqData, adminEmail) {
     const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
     const logsSheet = getOrCreateSheet(ss, SHEET_NAMES.logs);
@@ -5864,13 +5914,23 @@ function finalizeOvertimeSchedule(ss, targetUser, reqData, adminEmail) {
 
     const formatT = (d) => Utilities.formatDate(new Date(d), Session.getScriptTimeZone(), "HH:mm");
 
+    // 1. Calculate Shift Dates (Handle Overnight)
+    // If End Time is earlier than Start Time, it implies the shift ends the next day.
+    const startObj = new Date(reqData.startTime);
+    const endObj = new Date(reqData.endTime);
+    
+    let shiftEndDate = new Date(reqData.date); // Default to same day
+    if (endObj < startObj) {
+        shiftEndDate.setDate(shiftEndDate.getDate() + 1); // Next day
+    }
+
     if (reqData.type === 'Work Day Off') {
         updateOrAddSingleSchedule(
             scheduleSheet, {}, logsSheet,
             targetUser.email, targetUser.name,
-            new Date(reqData.date), new Date(reqData.date),
+            new Date(reqData.date), shiftEndDate, // Pass correct End Date
             targetDateStr,
-            formatT(reqData.startTime), formatT(reqData.endTime),
+            formatT(startObj), formatT(endObj),
             "Work Day Off", adminEmail
         );
     } else {
@@ -5879,13 +5939,22 @@ function finalizeOvertimeSchedule(ss, targetUser, reqData, adminEmail) {
         if (curSched) {
             let s = curSched.start;
             let e = curSched.end;
-            if (reqData.type === 'Pre-Shift') s = formatT(reqData.startTime);
-            if (reqData.type === 'Post-Shift') e = formatT(reqData.endTime);
+            
+            // If extending, we respect the NEW boundary
+            if (reqData.type === 'Pre-Shift') s = formatT(startObj);
+            if (reqData.type === 'Post-Shift') {
+                e = formatT(endObj);
+                // Recalculate shift end date based on new extended time
+                const schedStartObj = createDateTime(new Date(reqData.date), s);
+                const schedEndObj = createDateTime(new Date(reqData.date), e);
+                shiftEndDate = new Date(reqData.date);
+                if (schedEndObj < schedStartObj) shiftEndDate.setDate(shiftEndDate.getDate() + 1);
+            }
             
             updateOrAddSingleSchedule(
                 scheduleSheet, {}, logsSheet,
                 targetUser.email, targetUser.name,
-                new Date(reqData.date), new Date(reqData.date),
+                new Date(reqData.date), shiftEndDate,
                 targetDateStr,
                 s, e, "Present", adminEmail
             );
@@ -5903,32 +5972,51 @@ function webGetOvertimeRequests(filterStatus) {
   const isManager = ['admin','superadmin','manager','project_manager'].includes(userData.userRole);
   const mySubs = isManager ? new Set(webGetAllSubordinateEmails(userEmail)) : new Set();
 
+  const formatT = (val) => {
+    if (val instanceof Date) return Utilities.formatDate(val, Session.getScriptTimeZone(), "HH:mm");
+    if (typeof val === 'string' && val.includes('T')) return val.split('T')[1].substring(0,5);
+    // Try parsing if string date
+    const d = parseDate(val);
+    if (d) return Utilities.formatDate(d, Session.getScriptTimeZone(), "HH:mm");
+    return val || "";
+  };
+
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    // Security: View Own OR Subordinates
+    if (!row || row.length === 0) continue;
+
     const ownerID = row[1];
     const ownerUser = userData.userList.find(u => u.empID === ownerID);
     const ownerEmail = ownerUser ? ownerUser.email : "";
     
     let canView = (ownerEmail === userEmail);
-    if (!canView && isManager && (userData.userRole === 'superadmin' || mySubs.has(ownerEmail))) {
-        canView = true;
+    if (!canView && isManager) {
+        if (userData.userRole === 'superadmin') canView = true;
+        else if (mySubs.has(ownerEmail)) canView = true;
     }
 
     if (canView) {
-        if (filterStatus === 'All' || row[8] === filterStatus || (filterStatus === 'Pending' && row[8].includes('Pending'))) {
+        const status = row[8] || "Pending";
+        
+        // Parse the ShiftDate (row[3]) safely
+        const shiftDateObj = parseDate(row[3]);
+        const shiftDateStr = shiftDateObj ? convertDateToString(shiftDateObj).split('T')[0] : "Invalid Date";
+
+        if (filterStatus === 'All' || status === filterStatus || (filterStatus === 'Pending' && status.includes('Pending'))) {
             results.push({
                 id: row[0],
                 name: row[2],
-                date: convertDateToString(new Date(row[3])).split('T')[0],
-                time: `${Utilities.formatDate(new Date(row[4]), Session.getScriptTimeZone(), "HH:mm")} - ${Utilities.formatDate(new Date(row[5]), Session.getScriptTimeZone(), "HH:mm")}`,
+                date: shiftDateStr,
+                time: `${formatT(row[4])} - ${formatT(row[5])}`,
                 hours: row[6],
                 reason: row[7],
-                status: row[8],
-                type: row[12],
-                initiatedBy: row[17],
-                directStatus: row[15],
-                projectStatus: row[16]
+                status: status,
+                type: row[12] || "N/A",
+                directMgr: row[13] || "",
+                projectMgr: row[14] || "",
+                directStatus: row[15] || "Pending",
+                projectStatus: row[16] || "Pending",
+                initiatedBy: row[17] || "Agent"
             });
         }
     }
@@ -6062,6 +6150,709 @@ function webSaveBreakConfig(newConfigs) {
 }
 
 
+// --- 3. PHASE 5: ENTITLEMENT TEMPLATES (Financial Admin) ---
+
+function webSaveEntitlementTemplate(templateData) {
+  const { userEmail, ss } = getAuthorizedContext('MANAGE_FINANCE');
+  const sheet = getOrCreateSheet(ss, "Entitlement_Templates");
+  
+  const id = templateData.id || `TMP-${new Date().getTime()}`;
+  
+  if (templateData.id) {
+      // Update logic (simplified: delete old, add new, or find row)
+      // For simplicity in this iteration, we just append or use a find loop.
+      const data = sheet.getDataRange().getValues();
+      for(let i=1; i<data.length; i++) {
+          if(data[i][0] === id) {
+              sheet.deleteRow(i+1);
+              break;
+          }
+      }
+  }
+  
+  sheet.appendRow([
+      id,
+      templateData.name,
+      templateData.type,
+      templateData.amount,
+      templateData.currency,
+      templateData.description,
+      "Active"
+  ]);
+  
+  return "Template saved successfully.";
+}
+
+function webGetEntitlementTemplates() {
+  const { ss } = getAuthorizedContext('MANAGE_FINANCE');
+  const sheet = getOrCreateSheet(ss, "Entitlement_Templates");
+  const data = sheet.getDataRange().getValues();
+  const templates = [];
+  
+  for (let i = 1; i < data.length; i++) {
+      if (data[i][6] === 'Active') {
+          templates.push({
+              id: data[i][0],
+              name: data[i][1],
+              type: data[i][2],
+              amount: data[i][3],
+              currency: data[i][4],
+              desc: data[i][5]
+          });
+      }
+  }
+  return templates;
+}
+
+function webApplyEntitlementTemplate(templateId, targetEmails) {
+  const { userEmail: adminEmail, ss, userData } = getAuthorizedContext('MANAGE_FINANCE');
+  
+  // 1. Get Template
+  const tmplSheet = getOrCreateSheet(ss, "Entitlement_Templates");
+  const tmplData = tmplSheet.getDataRange().getValues();
+  let template = null;
+  for(let i=1; i<tmplData.length; i++) {
+      if(tmplData[i][0] === templateId) {
+          template = { type: tmplData[i][2], amount: tmplData[i][3], currency: tmplData[i][4], desc: tmplData[i][5] };
+          break;
+      }
+  }
+  if (!template) throw new Error("Template not found.");
+
+  // 2. Apply to Users
+  const finSheet = getOrCreateSheet(ss, SHEET_NAMES.financialEntitlements);
+  let count = 0;
+  
+  targetEmails.forEach(email => {
+      const user = userData.userList.find(u => u.email === email);
+      if (user) {
+          const id = `FIN-${new Date().getTime()}-${Math.floor(Math.random()*1000)}`;
+          finSheet.appendRow([
+              id,
+              user.email,
+              user.name,
+              template.type,
+              template.amount,
+              template.currency,
+              new Date(), // Due Date (Today)
+              "Pending",
+              template.desc,
+              adminEmail,
+              new Date()
+          ]);
+          count++;
+      }
+  });
+  
+  return `Successfully applied template to ${count} users.`;
+}
+
+// --- 4. PHASE 6: PROJECT ADMIN DASHBOARD ---
+
+function webGetProjectDashboard(projectId) {
+  const { userEmail, userData, ss } = getAuthorizedContext('MANAGE_PROJECTS'); // Project Manager Permission
+  
+  // Validate Access (User must manage this project or be Superadmin)
+  // Logic: Check if userEmail matches the project's manager in Projects sheet
+  const projSheet = getOrCreateSheet(ss, SHEET_NAMES.projects);
+  const projData = projSheet.getDataRange().getValues();
+  let projectInfo = null;
+  
+  for(let i=1; i<projData.length; i++) {
+      if(projData[i][0] === projectId) {
+          projectInfo = { id: projData[i][0], name: projData[i][1], manager: projData[i][2] };
+          break;
+      }
+  }
+  
+  if (!projectInfo) throw new Error("Project not found.");
+  if (userData.userRole !== 'superadmin' && projectInfo.manager !== userEmail) {
+      throw new Error("Permission denied. You do not manage this project.");
+  }
+
+  // 1. Calculate Stats
+  const stats = {
+      agents: 0,
+      tls: 0,
+      supers: 0,
+      total: 0
+  };
+  
+  userData.userList.forEach(u => {
+      if (u.projectManager === projectInfo.manager) { // Simple link by manager, or use ProjectID from Core if available
+          stats.total++;
+          if (u.role === 'agent') stats.agents++;
+          else if (u.role === 'manager') stats.supers++; // Assuming manager = supervisor
+          else stats.tls++; // Placeholder logic for TLs if role exists
+      }
+  });
+
+  return { info: projectInfo, stats: stats };
+}
+
+function webGetProjectRequests(projectId) {
+    const { userEmail, userData, ss } = getAuthorizedContext('MANAGE_PROJECTS');
+    // Fetch consolidated requests for all users under this project manager
+    // For simplicity, we filter by the manager's email (since ProjectID linking might be loose)
+    
+    // 1. Get Project Manager Email
+    const projSheet = getOrCreateSheet(ss, SHEET_NAMES.projects);
+    const projData = projSheet.getDataRange().getValues();
+    let pmEmail = "";
+    for(let i=1; i<projData.length; i++) {
+        if(projData[i][0] === projectId) { pmEmail = projData[i][2]; break; }
+    }
+    
+    const teamEmails = new Set();
+    userData.userList.forEach(u => {
+        if (u.projectManager === pmEmail) teamEmails.add(u.email);
+    });
+
+    const requests = [];
+    
+    // 2. Fetch Leave
+    const leaveData = getOrCreateSheet(ss, SHEET_NAMES.leaveRequests).getDataRange().getValues();
+    for(let i=1; i<leaveData.length; i++) {
+        if(teamEmails.has(leaveData[i][2])) {
+            requests.push({ type: "Leave", user: leaveData[i][3], date: convertDateToString(new Date(leaveData[i][9] || new Date())), status: leaveData[i][1] });
+        }
+    }
+    
+    // 3. Fetch Overtime
+    const otData = getOrCreateSheet(ss, SHEET_NAMES.overtime).getDataRange().getValues();
+    for(let i=1; i<otData.length; i++) {
+        // Need to lookup user email from ID (col 1)
+        const u = userData.userList.find(x => x.empID === otData[i][1]);
+        if(u && teamEmails.has(u.email)) {
+            requests.push({ type: "Overtime", user: otData[i][2], date: convertDateToString(new Date(otData[i][3])), status: otData[i][8] });
+        }
+    }
+
+    return requests.slice(0, 50); // Return last 50
+}
+
+// ==========================================
+// === PHASE 7: OFFBOARDING WORKFLOW ===
+// ==========================================
+
+/**
+ * 1. Submit Resignation (Agent)
+ */
+function webSubmitResignation(reason, exitDate) {
+  const { userEmail, userData, ss } = getAuthorizedContext(null);
+  const sheet = getOrCreateSheet(ss, SHEET_NAMES.offboarding);
+  
+  // Check for existing pending request
+  const data = sheet.getDataRange().getValues();
+  for(let i=1; i<data.length; i++) {
+      if(data[i][3] === userEmail && data[i][6].includes("Pending")) {
+          throw new Error("You already have a pending resignation request.");
+      }
+  }
+
+  const user = userData.userList.find(u => u.email === userEmail);
+  const reqID = `EXIT-${new Date().getTime()}`;
+  
+  sheet.appendRow([
+      reqID,
+      user.empID,
+      user.name,
+      userEmail,
+      "Resignation",
+      reason,
+      "Pending Managers",
+      user.supervisor,
+      user.projectManager,
+      "Pending", // DirectStatus
+      "Pending", // ProjectStatus
+      "Pending", // HRStatus
+      new Date(),
+      new Date(exitDate),
+      "Agent"
+  ]);
+  
+  return "Resignation submitted. It will be reviewed by your managers and HR.";
+}
+
+/**
+ * 2. Submit Termination (Manager/HR)
+ */
+function webSubmitTermination(targetEmail, reason, exitDate) {
+  const { userEmail: adminEmail, userData, ss } = getAuthorizedContext('OFFBOARD_EMPLOYEE'); 
+  // 'OFFBOARD_EMPLOYEE' permission is for Managers & HR
+  
+  const sheet = getOrCreateSheet(ss, SHEET_NAMES.offboarding);
+  const targetUser = userData.userList.find(u => u.email === targetEmail);
+  
+  if (!targetUser) throw new Error("User not found.");
+  
+  // Logic: Who is initiating?
+  const isHR = userData.userRole === 'superadmin' || userData.userRole === 'hr_manager'; // Assuming HR role exists or superadmin
+  
+  const reqID = `TERM-${new Date().getTime()}`;
+  const status = isHR ? "Approved" : "Pending HR"; // HR terminates immediately, Managers need HR approval
+  const hrStatus = isHR ? "Approved" : "Pending";
+  
+  sheet.appendRow([
+      reqID,
+      targetUser.empID,
+      targetUser.name,
+      targetEmail,
+      "Termination",
+      reason,
+      status,
+      targetUser.supervisor,
+      targetUser.projectManager,
+      "N/A", // DirectStatus (Bypassed)
+      "N/A", // ProjectStatus (Bypassed)
+      hrStatus,
+      new Date(),
+      new Date(exitDate),
+      `Manager: ${userData.userName}`
+  ]);
+
+  if (isHR) {
+      // Execute Immediate Offboarding
+      executeOffboarding(ss, targetEmail, exitDate, reason);
+      return `Employee ${targetUser.name} has been terminated immediately.`;
+  }
+  
+  return `Termination request for ${targetUser.name} submitted to HR.`;
+}
+
+/**
+ * 3. Get Requests (For Manager/HR Dashboard)
+ */
+function webGetOffboardingRequests() {
+  const { userEmail, userData, ss } = getAuthorizedContext(null);
+  const sheet = getOrCreateSheet(ss, SHEET_NAMES.offboarding);
+  const data = sheet.getDataRange().getValues();
+  const results = [];
+  
+  const isHR = userData.userRole === 'superadmin'; 
+  const isManager = ['admin','manager','project_manager'].includes(userData.userRole);
+  
+  for(let i=1; i<data.length; i++) {
+    try {
+      const row = data[i];
+      if (!row || row.length === 0) continue; // Skip empty rows
+
+      const targetEmail = row[3];
+      const directMgr = row[7];
+      const projectMgr = row[8];
+      
+      let canView = false;
+      if (isHR) canView = true;
+      if (isManager && (userEmail === directMgr || userEmail === projectMgr)) canView = true;
+      if (userEmail === targetEmail) canView = true; 
+      
+      if (canView) {
+          // --- FIX: Safe Date Parsing ---
+          let exitDateStr = "N/A";
+          if (row[13]) {
+             try {
+               const d = new Date(row[13]);
+               if (!isNaN(d.getTime())) {
+                  exitDateStr = Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+               }
+             } catch(e) {}
+          }
+          // -----------------------------
+
+          results.push({
+              id: row[0],
+              name: row[2],
+              type: row[4],
+              reason: row[5],
+              status: row[6],
+              directStatus: row[9],
+              projectStatus: row[10],
+              hrStatus: row[11],
+              exitDate: exitDateStr, // Uses the safe string
+              initiatedBy: row[14]
+          });
+      }
+    } catch (e) {
+      Logger.log("Error reading offboarding row " + i + ": " + e.message);
+    }
+  }
+  return results.reverse();
+}
+
+/**
+ * 4. Action Request (Approve/Deny)
+ */
+function webActionOffboarding(reqId, action, comment) {
+  const { userEmail, userData, ss } = getAuthorizedContext('OFFBOARD_EMPLOYEE');
+  const sheet = getOrCreateSheet(ss, SHEET_NAMES.offboarding);
+  const data = sheet.getDataRange().getValues();
+  
+  let rowIdx = -1;
+  let reqRow = [];
+  for(let i=1; i<data.length; i++) {
+      if(data[i][0] === reqId) { rowIdx = i+1; reqRow = data[i]; break; }
+  }
+  
+  if (rowIdx === -1) throw new Error("Request not found.");
+  
+  const directMgr = reqRow[7];
+  const projectMgr = reqRow[8];
+  const isHR = userData.userRole === 'superadmin';
+  const isDirect = userEmail === directMgr;
+  const isProject = userEmail === projectMgr;
+  
+  // DENY Logic
+  if (action === 'Denied') {
+      sheet.getRange(rowIdx, 7).setValue("Denied");
+      // Log who denied? ideally yes
+      return "Request Denied.";
+  }
+  
+  // APPROVE Logic
+  if (reqRow[4] === 'Resignation') {
+      if (isDirect) sheet.getRange(rowIdx, 10).setValue("Approved");
+      if (isProject) sheet.getRange(rowIdx, 11).setValue("Approved");
+      if (isHR) sheet.getRange(rowIdx, 12).setValue("Approved");
+      
+      // Check status to advance
+      // We need to re-read or assume based on current action
+      const dStat = isDirect ? "Approved" : reqRow[9];
+      const pStat = isProject ? "Approved" : reqRow[10];
+      const hStat = isHR ? "Approved" : reqRow[11];
+      
+      if (dStat === 'Approved' && pStat === 'Approved' && hStat === 'Pending') {
+          sheet.getRange(rowIdx, 7).setValue("Pending HR");
+      } else if (dStat === 'Approved' && pStat === 'Approved' && hStat === 'Approved') {
+          sheet.getRange(rowIdx, 7).setValue("Approved");
+          // Finalize
+          executeOffboarding(ss, reqRow[3], reqRow[13], "Resignation Approved");
+          return "Resignation Finalized. Employee Offboarded.";
+      }
+  } else if (reqRow[4] === 'Termination') {
+      if (isHR) {
+          sheet.getRange(rowIdx, 12).setValue("Approved");
+          sheet.getRange(rowIdx, 7).setValue("Approved");
+          executeOffboarding(ss, reqRow[3], reqRow[13], "Termination Approved");
+          return "Termination Finalized.";
+      }
+  }
+  
+  return "Approval Recorded.";
+}
+
+// Helper: Execute Final Offboarding (Update Core, Log History)
+function executeOffboarding(ss, email, exitDate, reason) {
+    const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.employeesCore);
+    const data = dbSheet.getDataRange().getValues();
+    const userData = getUserDataFromDb(ss);
+    const row = userData.emailToRow[email];
+    
+    if (row) {
+        // Update Status (Col 27/AA based on new schema, check index)
+        // Schema: ..., ExitDate, Status
+        // Let's look up headers dynamically to be safe
+        const headers = data[0];
+        const statusIdx = headers.indexOf("Status");
+        const exitIdx = headers.indexOf("ExitDate");
+        
+        if (statusIdx > -1) dbSheet.getRange(row, statusIdx+1).setValue("Left");
+        if (exitIdx > -1) dbSheet.getRange(row, exitIdx+1).setValue(new Date(exitDate));
+        
+        // Log History
+        const histSheet = getOrCreateSheet(ss, SHEET_NAMES.historyLogs);
+        histSheet.appendRow([
+            `HIST-${new Date().getTime()}`,
+            userData.userList.find(u=>u.email===email)?.empID,
+            new Date(),
+            "Offboarding",
+            "Active",
+            "Left"
+        ]);
+    }
+}
+
+
+// ==========================================
+// === PHASE 8: ANALYTICS & REPORTS ===
+// ==========================================
+
+/**
+ * Fetches data for the Visual Dashboard (Metrics + Timeline)
+ */
+function webGetAnalyticsData(filter) {
+  const { userEmail, userData, ss } = getAuthorizedContext('VIEW_FULL_DASHBOARD');
+  
+  // --- FIX: Adjust Dates to cover full day ---
+  const startDate = new Date(filter.startDate);
+  startDate.setHours(0, 0, 0, 0); // Start of Day
+  
+  const endDate = new Date(filter.endDate);
+  endDate.setHours(23, 59, 59, 999); // End of Day
+  // ------------------------------------------
+
+  const targetEmails = filter.targetEmails || []; 
+  const timeZone = Session.getScriptTimeZone();
+
+  const targetSet = new Set(targetEmails);
+  const processAll = targetSet.has('ALL');
+
+  const adherenceData = getOrCreateSheet(ss, SHEET_NAMES.adherence).getDataRange().getValues();
+  const otherCodesData = getOrCreateSheet(ss, SHEET_NAMES.otherCodes).getDataRange().getValues();
+  const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
+  const scheduleData = scheduleSheet.getDataRange().getValues();
+  
+  let totalScheduledMins = 0;
+  let totalWorkedMins = 0;
+  let totalShrinkageMins = 0;
+  let totalLateness = 0;
+  
+  const timeline = {};
+
+  // Build Schedule Map
+  const scheduleMap = {};
+  for (let i = 1; i < scheduleData.length; i++) {
+    const row = scheduleData[i];
+    const sEmail = (row[6] || "").toLowerCase();
+    
+    if (!processAll && !targetSet.has(sEmail)) continue;
+
+    const sDate = parseDate(row[1]);
+    if (!sEmail || !sDate) continue;
+    
+    const dateKey = Utilities.formatDate(sDate, timeZone, "yyyy-MM-dd");
+    const uniqueKey = `${sEmail}_${dateKey}`;
+    
+    const fmt = (v) => (v instanceof Date) ? Utilities.formatDate(v, timeZone, "HH:mm") : (v ? v.toString().substring(0, 5) : null);
+
+    scheduleMap[uniqueKey] = {
+      type: row[5],
+      start: fmt(row[2]), end: fmt(row[4]),
+      b1_start: fmt(row[7]), b1_end: fmt(row[8]),
+      l_start: fmt(row[9]),  l_end: fmt(row[10]),
+      b2_start: fmt(row[11]), b2_end: fmt(row[12])
+    };
+  }
+
+  const toDec = (t) => {
+    if (!t) return null;
+    const [h, m] = t.split(':').map(Number);
+    return h + (m / 60);
+  };
+
+  // Process Adherence
+  for (let i = 1; i < adherenceData.length; i++) {
+    const row = adherenceData[i];
+    const rowDate = new Date(row[0]);
+    const agentName = row[1];
+    const email = userData.nameToEmail[agentName];
+    
+    // Check Date Range (Now inclusive of time)
+    if (rowDate < startDate || rowDate > endDate) continue;
+    
+    if (!email || (!processAll && !targetSet.has(email))) continue;
+
+    const dateStr = Utilities.formatDate(rowDate, timeZone, "yyyy-MM-dd");
+    const schedKey = `${email}_${dateStr}`;
+    const sched = scheduleMap[schedKey] || { type: 'Day Off' };
+
+    if (!timeline[dateStr]) timeline[dateStr] = {};
+    if (!timeline[dateStr][agentName]) {
+      timeline[dateStr][agentName] = { events: [], flags: [], schedule: sched };
+    }
+
+    const netHours = parseFloat(row[22]) || 0;
+    totalWorkedMins += (netHours * 60);
+    const tardySec = parseFloat(row[10]) || 0;
+    totalLateness += (tardySec / 60);
+    const leaveType = (row[13] || "").toLowerCase();
+    
+    if (leaveType !== 'day off') totalScheduledMins += 540;
+    if (leaveType === 'absent' || (leaveType !== 'present' && leaveType !== 'day off' && leaveType !== '')) {
+       totalShrinkageMins += 540;
+    }
+    totalShrinkageMins += (tardySec / 60);
+
+    const formatT = (v) => (v instanceof Date) ? Utilities.formatDate(v, timeZone, "HH:mm") : null;
+    const login = formatT(row[2]);
+    const logout = formatT(row[9]);
+    
+    if (login && logout) timeline[dateStr][agentName].events.push({ type: 'Work', start: login, end: logout, label: 'Shift' });
+
+    const addBreak = (inT, outT, type, label) => {
+        const s = formatT(inT);
+        const e = formatT(outT);
+        if (s && e) {
+            timeline[dateStr][agentName].events.push({ type: type, start: s, end: e, label: label });
+            return { start: s, end: e };
+        }
+        return null;
+    };
+
+    const actB1 = addBreak(row[3], row[4], 'Break', '1st Break');
+    const actLunch = addBreak(row[5], row[6], 'Lunch', 'Lunch');
+    const actB2 = addBreak(row[7], row[8], 'Break', 'Last Break');
+
+    if (sched.start && login && toDec(login) > toDec(sched.start) + (5/60)) {
+        timeline[dateStr][agentName].flags.push({ type: 'Lateness', time: sched.start, msg: `Late: Login at ${login}` });
+    }
+    if (sched.end && logout && toDec(logout) < toDec(sched.end) - (5/60)) {
+        timeline[dateStr][agentName].flags.push({ type: 'EarlyLeave', time: logout, msg: `Early Leave: Out at ${logout}` });
+    }
+    if (sched.type === 'Present' && !login && leaveType !== 'Sick' && leaveType !== 'Annual') {
+        timeline[dateStr][agentName].flags.push({ type: 'NoShow', time: '09:00', msg: 'No Show / Absent' });
+    }
+
+    const checkWindow = (actual, sStart, sEnd, name) => {
+        if (actual && sStart && sEnd) {
+            const actStart = toDec(actual.start);
+            const winStart = toDec(sStart);
+            const winEnd = toDec(sEnd);
+            if (actStart < winStart || actStart > winEnd) {
+                timeline[dateStr][agentName].flags.push({ type: 'Adherence', time: actual.start, msg: `${name} out of window` });
+            }
+        }
+    };
+    checkWindow(actB1, sched.b1_start, sched.b1_end, "1st Break");
+    checkWindow(actLunch, sched.l_start, sched.l_end, "Lunch");
+    checkWindow(actB2, sched.b2_start, sched.b2_end, "Last Break");
+  }
+
+  // Process AUX
+  for (let i = 1; i < otherCodesData.length; i++) {
+      const row = otherCodesData[i];
+      const rowDate = new Date(row[0]);
+      const agentName = row[1];
+      const email = userData.nameToEmail[agentName];
+      
+      // Check Date Range (Fix)
+      if (rowDate < startDate || rowDate > endDate) continue;
+      
+      if (!email || (!processAll && !targetSet.has(email))) continue;
+      
+      const dateStr = Utilities.formatDate(rowDate, timeZone, "yyyy-MM-dd");
+      
+      if (!timeline[dateStr]) timeline[dateStr] = {};
+      if (!timeline[dateStr][agentName]) timeline[dateStr][agentName] = { events: [], flags: [], schedule: {} };
+
+      const formatT = (v) => (v instanceof Date) ? Utilities.formatDate(v, timeZone, "HH:mm") : null;
+      const s = formatT(row[3]);
+      const e = formatT(row[4]) || formatT(new Date()); 
+
+      if (s) timeline[dateStr][agentName].events.push({ type: 'Aux', start: s, end: e, label: row[2] });
+  }
+
+  const adherenceScore = totalScheduledMins > 0 ? ((totalWorkedMins / totalScheduledMins) * 100).toFixed(1) : 100;
+  const shrinkageScore = totalScheduledMins > 0 ? ((totalShrinkageMins / totalScheduledMins) * 100).toFixed(1) : 0;
+
+  return {
+    metrics: { adherence: adherenceScore, shrinkage: shrinkageScore, latenessMins: Math.round(totalLateness), workedHours: (totalWorkedMins/60).toFixed(1) },
+    timeline: timeline
+  };
+}
+
+/**
+ * Helper: Format date obj to HH:mm:ss string for timeline
+ */
+function formatTime(val) {
+  if (!val) return null;
+  if (val instanceof Date) return Utilities.formatDate(val, Session.getScriptTimeZone(), "HH:mm:ss");
+  // Handle strings
+  if (typeof val === 'string' && val.includes('T')) return val.split('T')[1].substring(0,8);
+  return val.toString().substring(0,8);
+}
+
+/**
+ * Generates Raw Data for Payroll CSV Export
+ */
+function webGetPayrollExportData(startDateStr, endDateStr, targetEmails) {
+  const { userEmail, userData, ss } = getAuthorizedContext('VIEW_FULL_DASHBOARD');
+  
+  const startDate = new Date(startDateStr);
+  startDate.setHours(0, 0, 0, 0);
+  
+  const endDate = new Date(endDateStr);
+  endDate.setHours(23, 59, 59, 999);
+
+  const otData = getOrCreateSheet(ss, SHEET_NAMES.overtime).getDataRange().getValues();
+  const adherenceData = getOrCreateSheet(ss, SHEET_NAMES.adherence).getDataRange().getValues();
+
+  // Normalize target list
+  const emailList = Array.isArray(targetEmails) ? targetEmails : [targetEmails];
+  const targetSet = new Set(emailList.map(e => e.toLowerCase().trim()));
+  const processAll = targetSet.has('all');
+
+  const exportRows = [];
+
+  for (let i = 1; i < adherenceData.length; i++) {
+    const row = adherenceData[i];
+    
+    // 1. Robust Date Parsing (Handles DD/MM/YYYY strings and Date objects)
+    const rowDate = parseDate(row[0]); 
+    if (!rowDate) continue; // Skip invalid dates
+
+    // 2. Date Filter
+    if (rowDate < startDate || rowDate > endDate) continue;
+
+    // 3. User Filter
+    const agentName = (row[1] || "").toString().trim();
+    // Try map lookup, fallback to raw check if name mismatch
+    let email = userData.nameToEmail[agentName]; 
+    if (!email) {
+       // Fallback: Try finding user by name in the userList directly if nameToEmail failed
+       const u = userData.userList.find(u => u.name.toLowerCase() === agentName.toLowerCase());
+       if (u) email = u.email;
+    }
+
+    if (!email) continue;
+    if (!processAll && !targetSet.has(email.toLowerCase())) continue;
+
+    // 4. Overtime Lookup
+    let approvedOTHours = 0;
+    let otType = "";
+    const dateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    
+    for(let j=1; j<otData.length; j++) {
+        const otEmpID = otData[j][1];
+        // Match by Employee ID (more reliable than email)
+        const otUser = userData.userList.find(u => u.empID === otEmpID);
+        if(otUser && otUser.email.toLowerCase() === email.toLowerCase()) {
+            const otDate = parseDate(otData[j][3]); // Robust parse for OT too
+            if (otDate) {
+               const otDateStr = Utilities.formatDate(otDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+               if (otDateStr === dateStr && otData[j][8] === 'Approved') {
+                   approvedOTHours += parseFloat(otData[j][6] || 0);
+                   otType = otData[j][12];
+               }
+            }
+        }
+    }
+
+    const formatTime = (val) => {
+        if (!val) return "";
+        if (val instanceof Date) return Utilities.formatDate(val, Session.getScriptTimeZone(), "HH:mm:ss");
+        if (typeof val === 'string' && val.includes('T')) return val.split('T')[1].substring(0,8);
+        return val.toString().substring(0,8);
+    };
+
+    exportRows.push({
+        Date: dateStr,
+        Name: agentName,
+        Email: email,
+        Status: row[13],
+        Login: formatTime(row[2]),
+        Logout: formatTime(row[9]),
+        NetWorkedHours: (parseFloat(row[22]) || 0).toFixed(2),
+        LatenessMins: Math.round((row[10]||0)/60),
+        EarlyLeaveMins: Math.round((row[12]||0)/60),
+        BreakExceedMins: Math.round(((row[16]||0) + (row[18]||0))/60),
+        LunchExceedMins: Math.round((row[17]||0)/60),
+        ApprovedOTHours: approvedOTHours.toFixed(2),
+        OTType: otType,
+        IsAbsent: row[19]
+    });
+  }
+  return exportRows;
+}
 
 //.............................................................................................................................
 
@@ -6071,28 +6862,23 @@ function webSaveBreakConfig(newConfigs) {
 
 
 
-// [code.gs] FIXED: Corrected History and Adherence Schemas
 function _MASTER_DB_FIXER() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   Logger.log("Starting Master DB Fixer...");
 
-  // 1. Define Schema
   const schema = {
+    // ... (Keep all existing schemas same as before) ...
     [SHEET_NAMES.rbac]: ["PermissionID", "Description", "superadmin", "admin", "manager", "project_manager", "financial_manager", "agent"],
     [SHEET_NAMES.employeesCore]: ["EmployeeID", "Name", "Email", "Role", "AccountStatus", "DirectManagerEmail", "FunctionalManagerEmail", "AnnualBalance", "SickBalance", "CasualBalance", "Gender", "EmploymentType", "ContractType", "JobLevel", "Department", "Function", "SubFunction", "GCMLevel", "Scope", "OffshoreOnshore", "DottedManager", "ProjectManagerEmail", "BonusPlan", "N_Level", "ExitDate", "Status"],
     [SHEET_NAMES.employeesPII]: ["EmployeeID", "HiringDate", "Salary", "IBAN", "Address", "Phone", "MedicalInfo", "ContractType", "NationalID", "PassportNumber", "SocialInsuranceNumber", "BirthDate", "PersonalEmail", "MaritalStatus", "DependentsInfo", "EmergencyContact", "EmergencyRelation", "BasicSalary", "VariablePay", "HourlyRate"],
     [SHEET_NAMES.financialEntitlements]: ["EntitlementID", "EmployeeEmail", "EmployeeName", "Type", "Amount", "Currency", "DueDate", "Status", "Description", "AddedBy", "DateAdded"],
+    ["Entitlement_Templates"]: ["TemplateID", "Name", "Type", "DefaultAmount", "Currency", "Description", "Status"],
     [SHEET_NAMES.pendingRegistrations]: ["RequestID", "UserEmail", "UserName", "DirectManagerEmail", "FunctionalManagerEmail", "DirectStatus", "FunctionalStatus", "Address", "Phone", "RequestTimestamp", "HiringDate", "WorkflowStage"],
     [SHEET_NAMES.recruitment]: ["CandidateID", "Name", "Email", "Phone", "Position", "CV_Link", "Status", "Stage", "InterviewScores", "AppliedDate", "NationalID", "LangLevel", "SecondLang", "Referrer", "HR_Feedback", "Mgmt_Feedback", "Tech_Feedback", "Client_Feedback", "OfferStatus", "RejectionReason", "HistoryLog"],
     [SHEET_NAMES.requisitions]: ["ReqID", "Title", "Department", "HiringManager", "OpenDate", "Status", "PoolCandidates", "JobDescription"],
     [SHEET_NAMES.performance]: ["ReviewID", "EmployeeID", "Year", "ReviewPeriod", "Rating", "ManagerComments", "Date"],
-    
-    // CORRECTION: Employee_History (HR Logs)
     [SHEET_NAMES.historyLogs]: ["HistoryID", "EmployeeID", "Date", "EventType", "OldValue", "NewValue"],
-    
-    // CORRECTION: Adherence Tracker (Daily Punches) - Was missing or wrong
     [SHEET_NAMES.adherence]: ["Date", "User Name", "Login", "First Break In", "First Break Out", "Lunch In", "Lunch Out", "Last Break In", "Last Break Out", "Logout", "Tardy (Seconds)", "Overtime (Seconds)", "Early Leave (Seconds)", "Leave Type", "Admin Audit", "—", "1st Break Exceed", "Lunch Exceed", "Last Break Exceed", "Absent", "Admin Code", "BreakWindowViolation", "NetLoginHours", "PreShiftOvertime", "LastAction", "LastActionTimestamp"],
-
     [SHEET_NAMES.schedule]: ["Name", "StartDate", "ShiftStartTime", "EndDate", "ShiftEndTime", "LeaveType", "agent email"],
     [SHEET_NAMES.logs]: ["Timestamp", "User Name", "Email", "Action", "Time"],
     [SHEET_NAMES.otherCodes]: ["Date", "User Name", "Code", "Time In", "Time Out", "Duration (Seconds)", "Admin Audit (Email)"],
@@ -6107,57 +6893,29 @@ function _MASTER_DB_FIXER() {
     [SHEET_NAMES.projectLogs]: ["LogID", "EmployeeID", "ProjectID", "Date", "HoursLogged"],
     [SHEET_NAMES.announcements]: ["AnnouncementID", "Content", "Status", "CreatedByEmail", "Timestamp"],
     [SHEET_NAMES.assets]: ["AssetID", "Type", "AssignedTo_EmployeeID", "DateAssigned", "Status"],
-    [SHEET_NAMES.overtime]: ["RequestID", "EmployeeID", "EmployeeName", "ShiftDate", "PlannedStart", "PlannedEnd", "RequestedHours", "Reason","Status", "ManagerComment", "ActionBy", "ActionDate", "Type","DirectManager", "ProjectManager", "DirectStatus", "ProjectStatus", "InitiatedBy"]
+    [SHEET_NAMES.overtime]: ["RequestID", "EmployeeID", "EmployeeName", "ShiftDate", "PlannedStart", "PlannedEnd", "RequestedHours", "Reason", "Status", "ManagerComment", "ActionBy", "ActionDate", "Type", "DirectManager", "ProjectManager", "DirectStatus", "ProjectStatus", "InitiatedBy"],
+    
+    // NEW OFFBOARDING SCHEMA
+    [SHEET_NAMES.offboarding]: ["RequestID", "EmployeeID", "Name", "Email", "Type", "Reason", "Status", "DirectManager", "ProjectManager", "DirectStatus", "ProjectStatus", "HRStatus", "RequestDate", "ExitDate", "InitiatedBy"]
   };
 
-  // 2. Run Fixer
+  // Run Fixer
   for (const [sheetName, headers] of Object.entries(schema)) {
     let sheet = getOrCreateSheet(ss, sheetName);
     const lastCol = sheet.getLastColumn();
     let currentHeaders = [];
-    if (lastCol > 0) {
-      currentHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    }
+    if (lastCol > 0) currentHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    
     const missingCols = [];
     headers.forEach(h => { if (!currentHeaders.includes(h)) missingCols.push(h); });
+    
     if (missingCols.length > 0) {
       const startCol = lastCol === 0 ? 1 : lastCol + 1;
       sheet.getRange(1, startCol, 1, missingCols.length).setValues([missingCols]);
-      Logger.log(`Updated ${sheetName}: Added [${missingCols.join(', ')}]`);
     }
   }
-
-  // 3. Populate Permissions (RBAC)
-  const rbacSheet = ss.getSheetByName(SHEET_NAMES.rbac);
-  if (rbacSheet.getLastRow() > 1) {
-     rbacSheet.getRange(2, 1, rbacSheet.getLastRow()-1, rbacSheet.getLastColumn()).clearContent();
-  }
-  
-  // Format: [PermissionID, Desc, Superadmin, Admin, Manager, Project_Manager, Fin_Manager, Agent]
-  const permissions = [
-    ["PUNCH_OTHERS", "Clock in others", true, true, true, true, false, false],
-    ["EDIT_SCHEDULE", "Manage Schedules", true, true, true, true, false, false],
-    ["APPROVE_LEAVE", "Approve Leave", true, true, true, true, false, false],
-    ["MANAGE_BALANCES", "Edit Leave Balances", true, true, false, false, false, false],
-    ["MANAGE_RECRUITMENT", "Hire/Reject Candidates", true, false, false, false, false, false],
-    ["HIRE_EMPLOYEE", "Finalize Hiring", true, false, false, false, false, false],
-    ["OFFBOARD_EMPLOYEE", "Terminate Staff", true, true, false, false, false, false],
-    ["SUBMIT_COACHING", "Perform Coaching", true, true, true, true, false, false],
-    ["MANAGE_TEMPLATES", "Edit Coaching Forms", true, true, false, false, false, false],
-    ["MANAGE_FINANCE", "Payroll/Bonuses", true, false, false, false, true, false],
-    ["MANAGE_PROJECTS", "Create Projects", true, true, false, true, false, false],
-    ["MANAGE_ANNOUNCEMENTS", "Post Announcements", true, false, false, false, false, false],
-    ["VIEW_FULL_DASHBOARD", "See Team Stats", true, true, true, true, false, false],
-    ["MANAGE_HIERARCHY", "Move Reporting Lines", true, true, false, false, false, false],
-    ["MANAGE_RBAC", "Edit Permissions", true, false, false, false, false, false],
-    ["SUBMIT_PERFORMANCE", "Submit Reviews", true, true, true, true, false, false],
-    ["MANAGE_OVERTIME", "Approve/Pre-approve Overtime", true, true, true, true, false, false]
-  ];
-  rbacSheet.getRange(2, 1, permissions.length, 8).setValues(permissions); // Width is 8 now
-  
-  Logger.log("Master DB Fix Complete.");
+  Logger.log("DB Fix Completed with Offboarding.");
 }
-
 
 
 
